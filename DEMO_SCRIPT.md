@@ -1,0 +1,84 @@
+# Demo Script
+
+## Current readiness
+
+The backend, MCP server, Assistant, and workflow are deployed/provisioned. Live phone testing
+is not possible yet because no Telnyx phone number is assigned. Do not present the phone section
+as completed until a number is attached and every path below has actually been exercised.
+
+Known smoke-test reservations exist on 2026-11-19 and 2026-11-20 (Hong Kong time). Use different
+dates for a clean demo.
+
+## Preflight
+
+```bash
+cd hong-kong-cafe
+curl -sS https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com/readyz
+set -a
+source ../.env.local
+set +a
+MCP_URL="https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com/mcp" npm run mcp:smoke
+telnyx-edge storage kv key put <kv-id> feature/reservations_enabled true
+telnyx-edge metrics hong-kong-cafe --since 15m
+```
+
+Expected readiness: secrets, KV, `DayBookings`, and `CallSession` are all true.
+
+## 8–10 minute live demo
+
+1. **Architecture, 1 minute.** Show the README diagram and explain the split:
+   - `DayBookings` actor for atomic per-date capacity.
+   - `CallSession` actor for the per-call misunderstanding counter.
+   - KV for flag, session/selection tokens, and callbacks.
+   - `src/core/` shared by MCP and signed shared-tool endpoints.
+
+2. **Happy-path reservation, 2 minutes.** Call the Assistant:
+   - Greeting and disclosure play verbatim.
+   - Book a table for four on a non-smoke-test date.
+   - Show the availability MCP call and selection-token booking in the terminal logs.
+   - Confirm the reservation is read back only after a clear yes.
+
+3. **Alternatives, 1 minute.** Request a slot already filled by the demo setup. Show up to three
+   same-day alternatives; if applicable, demonstrate the next-day search. Confirm the Assistant
+   checks availability again when the caller accepts a different time.
+
+4. **FAQ and MCP, 1 minute.** Ask for opening hours, address, and today’s dinner menu. Show the
+   MCP `get_restaurant_info`/`get_daily_menu` calls in logs.
+
+5. **Deterministic escalation, 2 minutes.** At a collection node, remain unclear through one
+   re-ask. Show the tool-node HTTP `200`. Repeat for counts 2 and 3. On the third, show HTTP `409`
+   and the workflow moving to callback collection. Confirm the saved callback and the
+   `already_saved` idempotent retry.
+
+6. **Feature-flag routing, 1 minute.** Set `feature/reservations_enabled` to `false`. Start a new
+   call. Show the dynamic-variable value and deterministic routing to callback-only handling.
+   Restore the flag to `true`.
+
+7. **Observability and failure path, 1 minute.** Show Edge request/error metrics and the JSON
+   runtime log for the same call ID. Point out masked caller, `tool`, `node`, `outcome`,
+   `latency_ms`, and the MCP correlation ID. Explain that the opaque session token is never
+   logged.
+
+8. **Debugging story, 1 minute.** Use `DEBUG_LOG.md`:
+   - First deploy stayed pending for about 21 minutes; actual deploy status proved it was not a
+     crash, and a later ship completed normally.
+   - MCP returned 503 because secrets were read from the binding object instead of
+     `process.env`.
+   - Live KV rejected colon keys; keys were centralized with allowed `/` separators.
+
+## If the phone number is still unavailable
+
+Show the deployed MCP endpoint with the official SDK smoke script, `GET /readyz`, Edge metrics,
+and the evidence in `DEBUG_LOG.md`. State clearly that real-call, signed-dynamic-variable, and
+spoken-transition verification remain pending. Do not imitate a phone conversation and call it
+a live test.
+
+## Evidence to capture
+
+- Phone number and Assistant ID.
+- Terminal showing `GET /readyz` all green and official MCP `tools/list`.
+- One successful booking confirmation ID.
+- Logs showing an MCP `tools/call` with correlated call ID.
+- Escalation logs with counts 1, 2, 3 and `409` on the third.
+- Dynamic-variable flag false routing evidence from a real call.
+- Edge metrics and logs captured during the same call.

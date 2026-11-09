@@ -1,0 +1,10 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.tools/
+*.log
+coverage/
+node_modules/
+hong-kong-cafe/node_modules/
+hong-kong-cafe/workflow/generated-resources.json

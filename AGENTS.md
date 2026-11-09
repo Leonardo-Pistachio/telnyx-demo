@@ -2,38 +2,111 @@
 
 ## Repository state
 
-- This is currently a challenge scaffold, not an implemented application. `code_challenge.md` is the requirements and submission checklist; there is no root application manifest, source tree, CI, or build/test/lint/typecheck command yet. Do not invent commands or present requirements as completed functionality. Derive commands from new project files as they are added, and update this file then.
+- This is an implemented and deployed Telnyx Edge application under `hong-kong-cafe/`, with
+  planning context in `PROJECT_BRIEF.md` and requirements in `code_challenge.md`. The public
+  MCP server, KV flows, Actors, Assistant, and 13-node workflow are provisioned and partially
+  live-verified. No phone number is assigned, so real-call/dynamic-webhook workflow testing is
+  incomplete.
+- Do not describe the phone demo or unexercised workflow paths as complete without evidence.
+  Deployment and debugging evidence is in `DEBUG_LOG.md`; smoke scripts are under
+  `hong-kong-cafe/scripts/`.
 
-## Required solution shape
+## Commands
 
-- Preserve the required end-to-end path: phone-callable Telnyx Assistant with a multi-node Conversation Workflow (prompt nodes, at least one speak node, and conditional edges), dynamic variables from a Telnyx Edge Function, and a publicly accessible custom MCP server exposing at least three useful tools. The dynamic webhook must run on Telnyx Edge Compute, not another hosting provider.
-- Dynamic variables must influence workflow routing (e.g., variable-comparison edges), not merely personalize text.
-- Use KV for session data, caching, or feature flags and a Stateful Actor for per-entity state requiring single-threaded read-modify-write. TypeScript functions access KV through `env` bindings; other languages use the KV REST API. Declare bindings in the generated `func.toml`.
-- Instrument every webhook with structured caller/node/outcome logs and at least one additional signal (counter, latency, or correlated trace). Preserve evidence of a real debugging investigation for the required demo.
+Run application commands from `hong-kong-cafe/`:
 
-## Design guidance
+```bash
+npm install
+npm run check          # typecheck, then all vitest tests
+npm run typecheck
+npm test
+npm run dev            # local Telnyx Edge development
+npm run mcp:smoke      # requires MCP_URL and MCP_API_KEY
+npm run mcp:business-smoke   # live booking, idempotency, capacity race
+npm run mcp:session-smoke    # requires SMOKE_SESSION_TOKEN
+npm run provision:assistant  # requires TELNYX_API_KEY, MCP_API_KEY, FUNCTION_URL
+telnyx-edge types      # regenerate telnyx-env.d.ts after binding/export changes
+telnyx-edge ship --yes
+telnyx-edge list
+telnyx-edge ship status hong-kong-cafe --logs
+telnyx-edge logs hong-kong-cafe --type runtime --since 15m
+telnyx-edge logs hong-kong-cafe --type invocations --since 15m
+telnyx-edge metrics hong-kong-cafe
+```
 
-- Use speak nodes for anything that must be delivered verbatim (greetings, disclosures, compliance text).
-- Scope tools per workflow node; give each node only the MCP tools it needs.
-- Use variable comparisons for deterministic routing and LLM conditions for intent-based routing.
-- Record why each piece of state uses an Actor, KV, or plain function logic; reviewers will ask.
+There is no lint, CI, or production build script. `telnyx-edge ship` performs the Edge
+bundle/build. Do not add generic commands without updating this file.
 
-## Deliverables
+## Architecture
 
-- See "Submission Requirements" and "What to Prepare" in `code_challenge.md`. In particular: public Edge Function and MCP URLs, a callable phone number, an architecture diagram (Assistant → Workflow → Edge Function → KV/Actor → MCP), a brief demo script, and the committed OpenCode config.
-- The README must cover setup, architecture, usage, observability (including how you would know within a minute that the assistant is broken and what you would look at first), and the debugging story.
+- `src/app.ts` composes Hono routes; `src/index.ts` exports both actor classes plus the fetch
+  handler. `telnyx.toml` is the real manifest (`[[actors]]`, `[storage.kv.CAFE_KV]`), not
+  `func.toml`.
+- `workflow/assistant-config.mjs` is the executable Assistant/workflow definition.
+  `scripts/provision-assistant.mjs` idempotently creates/updates the MCP server, four shared
+  misunderstanding tools, and Assistant. Re-run it after changing workflow behavior.
+- `POST /mcp` is a public MCP Streamable HTTP endpoint with bearer auth from `MCP_API_KEY`.
+  It exposes six tools in `src/mcp/tools.ts`. Plain REST endpoints do not satisfy the challenge.
+- `POST /webhook/dynamic-vars` and `POST /webhook/misunderstanding/:stage` verify Telnyx
+  Ed25519 signatures against the raw body and timestamp.
+- `DayBookings` is one actor per Hong Kong calendar date; capacity check plus insert happens
+  inside `transactionSync` with embedded SQL. `CallSession` owns the per-call misunderstanding
+  counter.
+- KV stores the feature flag, random session-token→trusted-call-ID mappings, 10-minute
+  booking-selection tokens, and write-once callbacks with TTLs. Never trust a model-supplied
+  call ID; MCP tools resolve the trusted ID through the random session token.
+- Business logic is pure TypeScript in `src/core/`. MCP and shared-webhook adapters must reuse
+  it rather than duplicate reservation rules.
+- All date/time logic uses `Asia/Hong_Kong`; the last bookable slot is 20:30 and a reservation
+  occupies 90 minutes.
 
-## Telnyx and OpenCode tooling
+## Edge pitfalls
 
-- Keep `@telnyx/opencode` enabled in `.opencode/opencode.json` and `.opencode/tui.json`; the challenge requires Telnyx-hosted models for development. Both files are submission deliverables and must be committed. Authenticate with `opencode auth login --provider telnyx --method "API Key"` and verify with `opencode auth list`. Select current models through `/telnyx` in the TUI rather than relying on example model IDs in the challenge.
-- `.opencode/package.json`, `.opencode/package-lock.json`, and `.opencode/node_modules/` are tool-managed and ignored by `.opencode/.gitignore`; do not treat them as application dependencies. Application code needs its own manifest and lockfile.
-- The challenge's `telnyx-edge` install command is Linux amd64 only; on macOS download the matching archive (e.g., darwin arm64) from the `team-telnyx/edge-compute` releases page.
-- Scaffold TypeScript functions with `telnyx-edge new-func <name> -l typescript`; deploy from the function directory with `telnyx-edge ship`.
+- Secrets added with `telnyx-edge secrets add` are injected at deploy time as `process.env`
+  variables. They are not properties of the binding `env` object. Re-ship after changing one.
+- Regenerate `telnyx-env.d.ts` with `telnyx-edge types` whenever actor bindings or exported
+  actor methods change.
+- `@telnyx/edge-runtime` is pinned. Do not set it back to `latest`; verify embedded SQL and
+  `transactionSync` compatibility before upgrading.
+- `.env.local` contains the local MCP token and is ignored. Never commit it or print it.
+- A CLI monitor timeout is not proof of deploy failure; check `telnyx-edge list`,
+  `telnyx-edge ship status`, and deployment JSON. A deploy operation can remain busy and block
+  subsequent ships with HTTP 409. The first deploy here took about 21 minutes.
+- `hong-kong-cafe/.npmrc` sets `legacy-peer-deps=true` to work around an npm 11 arborist crash
+  while resolving Vitest's optional browser peers. Keep it unless the dependency set changes.
 
-## Secrets
+## Required solution invariants
 
-- Never commit Telnyx API keys, tokens, or other credentials. Keep them in function secrets/environment configuration or local untracked files.
+- Keep MCP, dynamic-variable routing, KV, at least one Stateful Actor, and structured
+  observability in the required Phase 1 path. Weather is out of scope.
+- Dynamic variables must route (`call_support_available`, then `reservations_enabled`), not
+  only personalize text. Safe fallback for both is `"false"`.
+- Speak nodes carry verbatim copy; tool nodes carry deterministic failure/counter actions.
+  The Assistant API has no per-node MCP tool selector, so node instructions restrict tool use
+  and deterministic shared-tool nodes handle failure routing. Do not claim API-level per-node
+  MCP scoping.
+- Do not implement the old LLM-counted misunderstanding workflow. See `PROJECT_BRIEF.md`
+  section 6 and resolve unresolved workflow/review items before calling it complete.
+- Mask phone numbers in logs. Booking tokens and session tokens are bearer-like values; never
+  log them or include them in callbacks/error details.
 
 ## Verification
 
-- Once checks exist, run the project's real focused and full checks. For the delivered system, exercise an actual MCP tool call, dynamic-variable routing, KV/Actor state changes, and happy, fallback, escalation, and negative workflow paths through the live assistant.
+- Run `npm run check` after changes.
+- Already live-verified: readiness, MCP auth/client calls, booking idempotency, concurrent
+  last-seat protection, three-count escalation, callback idempotency, correlation logging, and
+  Actor persistence after redeploy.
+- Still required: assign a phone number, verify Telnyx-signed dynamic variables from a real
+  call, exercise every spoken workflow edge, and capture demo evidence.
+- Preserve real failing evidence in `DEBUG_LOG.md`; do not fabricate a debugging story.
+
+## Deliverables and tooling
+
+- Required artifacts are listed in `code_challenge.md` and `PROJECT_BRIEF.md`: public function
+  and MCP URLs, phone number, README, architecture diagram, demo script, debugging story, and
+  committed OpenCode config.
+- Keep `@telnyx/opencode` enabled in `.opencode/opencode.json` and `.opencode/tui.json`. Use
+  Telnyx-hosted models selected through `/telnyx`; authenticate with
+  `opencode auth login --provider telnyx --method "API Key"` and check with `opencode auth list`.
+- `.opencode/package.json`, its lockfile, and `node_modules/` are tool-managed. Application
+  dependencies belong in `hong-kong-cafe/package.json`.

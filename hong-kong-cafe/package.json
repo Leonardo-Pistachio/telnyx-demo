@@ -1,0 +1,32 @@
+{
+  "name": "hong-kong-cafe",
+  "version": "0.1.0",
+  "description": "Telnyx Edge StatefulActor function",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "telnyx-edge dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm test",
+    "mcp:smoke": "node scripts/mcp-smoke.mjs",
+    "mcp:business-smoke": "node scripts/mcp-business-smoke.mjs",
+    "mcp:session-smoke": "node scripts/mcp-session-smoke.mjs",
+    "provision:assistant": "node scripts/provision-assistant.mjs"
+  },
+  "dependencies": {
+    "@telnyx/edge-runtime": "0.16.1",
+    "hono": "^4.13.17",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
