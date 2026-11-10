@@ -8,6 +8,7 @@ import {
   recordMisunderstandingBySessionToken,
   type MisunderstandingStage,
 } from "../core/misunderstanding";
+import { logEvent } from "../lib/logger";
 import type { HongKongNow } from "../lib/time";
 
 export interface McpToolContext {
@@ -200,6 +201,22 @@ export const MCP_TOOLS: McpToolDefinition[] = [
           parsed.data.phone,
           context.now,
         );
+        logEvent(
+          result.ok || result.code === "slot_taken" ? "info" : "warn",
+          result.ok
+            ? "booking_created"
+            : result.code === "slot_taken"
+              ? "slot_taken"
+              : "booking_failed",
+          {
+            route: "mcp:create_reservation",
+            node: "mcp",
+            tool: "create_reservation",
+            outcome: result.ok ? "success" : "rejected",
+            error_code: result.ok ? undefined : result.code,
+            result: result.ok ? result.status : result.code,
+          },
+        );
         return result.ok ? toolResult(result) : toolError(result);
       } catch {
         return unexpectedToolError();
@@ -255,6 +272,14 @@ export const MCP_TOOLS: McpToolDefinition[] = [
           parsed.data.phone,
           parsed.data.name,
         );
+        logEvent(result.ok ? "info" : "warn", result.ok ? "callback_saved" : "callback_failed", {
+          route: "mcp:request_callback",
+          node: "mcp",
+          tool: "request_callback",
+          outcome: result.ok ? "success" : "rejected",
+          error_code: result.ok ? undefined : result.code,
+          result: result.ok ? result.status : result.code,
+        });
         return result.ok ? toolResult(result) : toolError(result);
       } catch {
         return unexpectedToolError();

@@ -6,9 +6,9 @@ cannot be understood or the restaurant is unavailable. Availability, bookings, c
 and callbacks are backed by Telnyx Edge primitives.
 
 The backend and MCP server are deployed and live-verified. The Telnyx Assistant and 13-node
-workflow are provisioned, but no phone number is assigned because provisioning was explicitly
-deferred. Real phone calls, Telnyx-signed dynamic-variable delivery, and the full spoken
-workflow are therefore still unverified; do not present the phone demo as complete.
+workflow are provisioned, and the phone number `+1 603 471 5321` is assigned to the Assistant.
+Real phone calls, Telnyx-signed dynamic-variable delivery, and the full spoken workflow are not
+yet verified; do not present the phone demo as complete until they have been exercised.
 
 ## What is implemented
 
@@ -180,7 +180,9 @@ npm run provision:assistant
 The script is idempotent by resource name and writes non-secret resource IDs to the ignored
 `workflow/generated-resources.json`. The provisioned Assistant ID is
 `assistant-4df34ebc-c6b6-4efa-8996-ecc81b9d9a7b` and the MCP server ID is
-`2eb46048-5446-4a39-8254-07de7f656ab0`. No phone number is assigned yet.
+`2eb46048-5446-4a39-8254-07de7f656ab0`. The phone number `+1 603 471 5321` (Telnyx connection
+`3089131497156773662`) is assigned to the Assistant. Its dynamic-variables webhook is
+`https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com/webhook/dynamic-vars`.
 
 Validate the public MCP endpoint with the official MCP client:
 
@@ -275,8 +277,8 @@ the workflow, tool attachment, or phone configuration instead.
 
 ## Current limitations
 
-- The Assistant and workflow are provisioned, but no Telnyx phone number is assigned because
-  the user deferred provisioning. Phone-oriented live testing is incomplete.
+- The Assistant and workflow are provisioned, and phone number `+1 603 471 5321` is assigned.
+  Phone-oriented live testing is still incomplete until real calls are made.
 - Telnyx-signed dynamic-variable delivery and the spoken tool-node transitions cannot be fully
   verified until a real phone call is made.
 - MCP tools are attached at Assistant level; the current Assistant API cannot select MCP tools

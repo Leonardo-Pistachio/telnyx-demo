@@ -91,6 +91,7 @@ dynamicVariablesRoutes.post("/webhook/dynamic-vars", async (context) => {
           ? "feature_flag_unavailable"
           : undefined,
       latency_ms: Math.round(performance.now() - startedAt),
+      result: `reservations_enabled=${result.variables.reservations_enabled};call_support_available=${result.variables.call_support_available}`,
     });
 
     return context.json({ dynamic_variables: result.variables });

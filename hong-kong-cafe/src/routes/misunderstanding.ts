@@ -85,6 +85,7 @@ misunderstandingRoutes.post(
         node: `misunderstanding.${stage}`,
         outcome: "success",
         count: result.count,
+        status,
         metric: result.shouldEscalate
           ? "escalated_to_callback"
           : "misunderstanding_recorded",

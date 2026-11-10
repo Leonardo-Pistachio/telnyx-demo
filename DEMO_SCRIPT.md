@@ -2,9 +2,10 @@
 
 ## Current readiness
 
-The backend, MCP server, Assistant, and workflow are deployed/provisioned. Live phone testing
-is not possible yet because no Telnyx phone number is assigned. Do not present the phone section
-as completed until a number is attached and every path below has actually been exercised.
+The backend, MCP server, Assistant, and workflow are deployed/provisioned, and the phone number
+`+1 603 471 5321` is assigned to the Assistant. Real-call testing has not been done yet. Do not
+present the phone section as completed until every path below has actually been exercised on a
+call.
 
 Known smoke-test reservations exist on 2026-11-19 and 2026-11-20 (Hong Kong time). Use different
 dates for a clean demo.
@@ -66,7 +67,7 @@ Expected readiness: secrets, KV, `DayBookings`, and `CallSession` are all true.
      `process.env`.
    - Live KV rejected colon keys; keys were centralized with allowed `/` separators.
 
-## If the phone number is still unavailable
+## If real calls have not succeeded yet
 
 Show the deployed MCP endpoint with the official SDK smoke script, `GET /readyz`, Edge metrics,
 and the evidence in `DEBUG_LOG.md`. State clearly that real-call, signed-dynamic-variable, and
@@ -75,7 +76,7 @@ a live test.
 
 ## Evidence to capture
 
-- Phone number and Assistant ID.
+- Phone number (`+1 603 471 5321`) and Assistant ID.
 - Terminal showing `GET /readyz` all green and official MCP `tools/list`.
 - One successful booking confirmation ID.
 - Logs showing an MCP `tools/call` with correlated call ID.

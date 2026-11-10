@@ -3,6 +3,7 @@ import { getHongKongNow, type HongKongNow } from "../lib/time";
 import {
   ALTERNATIVE_SEARCH_DAYS,
   BOOKABLE_TIMES,
+  bookedSlotTimes,
   isBookableTimeOnDate,
   validateBookingRequest,
   type BookingIssue,
@@ -40,8 +41,9 @@ export function freeTimesForDate(
 ): string[] {
   return BOOKABLE_TIMES.filter((time) => {
     if (!isBookableTimeOnDate(date, time, now)) return false;
-    const used = seatUsage[time] ?? 0;
-    return used + partySize <= RESTAURANT.capacity;
+    return bookedSlotTimes(time).every(
+      (slot) => (seatUsage[slot] ?? 0) + partySize <= RESTAURANT.capacity,
+    );
   });
 }
 

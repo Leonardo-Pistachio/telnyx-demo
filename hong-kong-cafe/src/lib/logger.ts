@@ -13,6 +13,8 @@ export interface LogFields {
   error_code?: string;
   metric?: string;
   count?: number;
+  status?: number;
+  result?: string;
 }
 
 export function maskPhone(value: string | undefined): string | undefined {

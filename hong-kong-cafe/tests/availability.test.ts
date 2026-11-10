@@ -68,10 +68,26 @@ describe("availability", () => {
     expect(result.alternatives.every((slot) => slot.date === "2026-11-10")).toBe(
       true,
     );
-    expect(result.alternatives[0]?.time).toBe("17:30");
+    expect(result.alternatives[0]?.time).toBe("16:30");
     expect(
       result.alternatives.some((slot) => slot.time === "18:00"),
     ).toBe(false);
+  });
+
+  it("rejects alternatives whose later occupied slots are full", async () => {
+    const result = await findAvailability(
+      "2026-11-10",
+      "18:00",
+      2,
+      async () => ({ "19:00": 40 }),
+      NOW,
+    );
+
+    expect(result.ok && result.requested_available).toBe(false);
+    const times = result.ok ? result.alternatives.map((slot) => slot.time) : [];
+    expect(times).not.toContain("18:00");
+    expect(times).not.toContain("18:30");
+    expect(times[0]).toBe("17:30");
   });
 
   it("searches following dates after the requested date is full", async () => {
