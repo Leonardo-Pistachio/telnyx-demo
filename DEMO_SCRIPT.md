@@ -2,10 +2,11 @@
 
 ## Current readiness
 
-The backend, MCP server, Assistant, and workflow are deployed/provisioned, and the phone number
-`+1 603 471 5321` is assigned to the Assistant. Real-call testing has not been done yet. Do not
-present the phone section as completed until every path below has actually been exercised on a
-call.
+The backend, MCP server, Assistant, and workflow are deployed/provisioned. The US number
+`+1 603 471 5321` is assigned to the Assistant (a Hong Kong number costs 75 USD). The owner
+cannot call it from their own phone, so full real-call testing has not been done. The owner has
+confirmed the reservations-disabled flow in a live test (see step 6). Do not present the
+phone section as completed until every path below has actually been exercised on a call.
 
 Known smoke-test reservations exist on 2026-11-19 and 2026-11-20 (Hong Kong time). Use different
 dates for a clean demo.
@@ -29,8 +30,8 @@ Expected readiness: secrets, KV, `DayBookings`, and `CallSession` are all true.
 
 1. **Architecture, 1 minute.** Show the README diagram and explain the split:
    - `DayBookings` actor for atomic per-date capacity.
-   - `CallSession` actor for the per-call misunderstanding counter.
-   - KV for flag, session/selection tokens, and callbacks.
+   - `CallSession` actor for the per-call misunderstanding counter and the single callback.
+   - KV for the flag and session/selection tokens.
    - `src/core/` shared by MCP and signed shared-tool endpoints.
 
 2. **Happy-path reservation, 2 minutes.** Call the Assistant:
@@ -67,7 +68,9 @@ Expected readiness: secrets, KV, `DayBookings`, and `CallSession` are all true.
    `already_saved` idempotent retry.
 
 6. **Feature-flag routing, 1 minute.** Set `feature/reservations_enabled` to `false`. Start a new
-   call. Show the dynamic-variable value and deterministic routing to callback-only handling.
+   call. Show the dynamic-variable value. Ask for the address (still answered), then ask for a
+   table: the assistant says "not taking reservations right now, please call back later" with
+   no details collected.
    Restore the flag to `true`.
 
 7. **Observability and failure path, 1 minute.** Show Edge request/error metrics and the JSON
@@ -75,12 +78,19 @@ Expected readiness: secrets, KV, `DayBookings`, and `CallSession` are all true.
    `latency_ms`, and the MCP correlation ID. Explain that the opaque session token is never
    logged.
 
-8. **Debugging story, 1 minute.** Use `DEBUG_LOG.md`:
+8. **Debugging story, 1 minute.** Use `DEBUG_LOG.md`. Lead with the callback bug:
+   - Callers heard "technical issue saving the callback". Runtime logs showed two
+     `request_callback` calls ending in `mcp_error` and no `callback_saved`/`callback_failed`
+     event, which located the failure at argument validation. The model sent the phone as a JSON
+     number; the fix coerces it and re-asks instead of failing.
    - First deploy stayed pending for about 21 minutes; actual deploy status proved it was not a
      crash, and a later ship completed normally.
    - MCP returned 503 because secrets were read from the binding object instead of
      `process.env`.
    - Live KV rejected colon keys; keys were centralized with allowed `/` separators.
+   - With the reservations flag off, callers were still drawn into details collection because
+     the only variable edge sat on a prompt node; the fix routes a booking request to a
+     verbatim "call back later" message while FAQ keeps working.
 
 ## If real calls have not succeeded yet
 

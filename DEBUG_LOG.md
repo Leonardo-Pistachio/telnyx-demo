@@ -164,3 +164,34 @@ only, and the escalate node re-asks for the number instead of declaring a techni
 `callback_first: saved` and `callback_retry: already_saved`; runtime logs recorded
 `callback_email_sent` (`cb_b58fdfb9-fbc3-4aea-b69e-3b7a2dbb4d69`) exactly once and only
 `already_saved` on the retry.
+
+## 2026-11-11 — Reservations-disabled flag did not reject cleanly
+
+**Symptom:** With `feature/reservations_enabled` set to `false`, the assistant still asked the
+caller for details instead of declining a booking and asking them to call back later.
+
+**Cause:** The only `reservations_enabled == "false"` edge was on Identify Intent, a prompt node,
+and it pointed at Escalate (callback number collection). Edges on a prompt node are evaluated
+after the model's turn, so the caller was drawn into a details-collection conversation first.
+
+**First fix (wrong behavior):** Moved the variable edge onto the Greeting speak node, routed to a
+new verbatim "Reservations Unavailable" speak node. Speak-node edges evaluate immediately, so the
+call was rejected before the caller spoke, which also blocked FAQ questions the caller was still
+allowed to ask.
+
+**Final fix:** Removed the greeting flag edge. Identify Intent now has an LLM edge, listed before
+the booking edges, that routes "caller wants to make, check, or move a reservation while
+`reservations_enabled` is false" to the Reservations Unavailable message. The assistant
+instructions include `Reservations enabled: {{reservations_enabled}}` so the model can judge it.
+The variable edges on Reservation, Confirm Booking, and Check Or Change Booking now point at the
+same message as a backstop.
+
+**Verification:** `npm run check` passed (75/75) including tests that the greeting never rejects
+and the closed-reservations edge precedes the booking edges. The live Assistant was fetched after
+re-provisioning and showed 16 nodes and the expected Greeting/Identify edges. The owner then
+confirmed in a live test that, with the flag off, FAQ questions are answered and a booking request
+is rejected with "call back later".
+
+**Trade-off:** This path is decided by the model for the FAQ-vs-booking split. The variable
+backstop on the booking nodes covers misrouted callers. No log capture was saved for the owner's
+live test, so this verification rests on the owner's report.

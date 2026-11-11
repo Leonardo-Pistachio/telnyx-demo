@@ -141,7 +141,6 @@ console.log(
       assistant_id: assistant.id,
       mcp_server_id: mcpServer.id,
       shared_tool_ids: sharedToolIds,
-      phone_number: "not assigned",
     },
     null,
     2,

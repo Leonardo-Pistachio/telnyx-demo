@@ -51,7 +51,7 @@ describe("Assistant workflow configuration", () => {
     }
   });
 
-  it("routes support failure before the reservations flag", () => {
+  it("routes support failure by variable and leaves the flag to the booking intent", () => {
     const variableEdges = flow.edges.filter(
       (edge) =>
         edge.start_node_id === "n_identify" &&
@@ -60,8 +60,50 @@ describe("Assistant workflow configuration", () => {
 
     expect(variableEdges.map((edge) => edge.id)).toEqual([
       "e_identify_support_failure",
-      "e_identify_reservations_disabled",
     ]);
+  });
+
+  it("does not reject before the caller speaks, so FAQ still works", () => {
+    const greetingEdges = flow.edges.filter(
+      (edge) => edge.start_node_id === "n_greeting",
+    );
+    expect(greetingEdges.map((edge) => edge.target.node_id)).toEqual([
+      "n_technical_failure",
+      "n_identify",
+    ]);
+
+    const identifyEdges = flow.edges.filter(
+      (edge) => edge.start_node_id === "n_identify",
+    );
+    const closedIndex = identifyEdges.findIndex(
+      (edge) => edge.id === "e_identify_reservations_closed",
+    );
+    const firstBookingIndex = identifyEdges.findIndex(
+      (edge) =>
+        edge.id === "e_identify_manage" || edge.id === "e_identify_reservation",
+    );
+    const faq = identifyEdges.find((edge) => edge.id === "e_identify_faq");
+
+    expect(closedIndex).toBeGreaterThanOrEqual(0);
+    expect(closedIndex).toBeLessThan(firstBookingIndex);
+    expect(faq.target.node_id).toBe("n_faq");
+    expect(identifyEdges[closedIndex].target.node_id).toBe(
+      "n_reservations_unavailable",
+    );
+  });
+
+  it("never sends a disabled-reservations route to callback collection", () => {
+    const disabledEdges = flow.edges.filter(
+      (edge) =>
+        edge.condition.type === "expression" &&
+        edge.condition.expression.left.name === "reservations_enabled",
+    );
+
+    expect(disabledEdges.length).toBeGreaterThan(0);
+    for (const edge of disabledEdges) {
+      expect(edge.target.node_id).toBe("n_reservations_unavailable");
+    }
+    expect(nodeById.get("n_reservations_unavailable").type).toBe("speak");
   });
 
   it("routes every misunderstanding tool by 200, 409, and default", () => {

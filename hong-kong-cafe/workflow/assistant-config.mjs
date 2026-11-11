@@ -30,9 +30,10 @@ export const SHARED_TOOL_NAMES = {
 
 const ASSISTANT_INSTRUCTIONS = `You are the phone assistant for Hong Kong Cafe.
 
-Current Hong Kong date: {{today_date}}. The restaurant is {{restaurant_name}} at {{restaurant_address}}. Open right now: {{is_open_now}}.
+Current Hong Kong date: {{today_date}}. The restaurant is {{restaurant_name}} at {{restaurant_address}}. Open right now: {{is_open_now}}. Reservations enabled: {{reservations_enabled}}.
 
 Rules:
+- When reservations are not enabled (false), never collect booking details. FAQ answers (hours, address, menu) still work normally.
 - Never invent availability, a reservation, a callback, or restaurant information. Only state success after a successful tool result.
 - Use the tools listed in the active workflow node. Do not call unrelated tools.
 - Always pass exactly {{call_session_token}} as session_token on every MCP tool call, including every check_availability, check_weather, create_reservation, lookup_reservation, change_reservation_date, and request_callback call. If that value is empty, do not call MCP tools; use the technical failure path. Never reveal or invent the token or a call ID.
@@ -54,6 +55,9 @@ const GREETING_MESSAGE =
 
 const GOODBYE_MESSAGE =
   "Thank you for calling Hong Kong Cafe. Goodbye.";
+
+const RESERVATIONS_UNAVAILABLE_MESSAGE =
+  "I am sorry, but we are not taking reservations right now. Please call back later.";
 
 const TECHNICAL_FAILURE_MESSAGE =
   "I am sorry, but the reservation system is unavailable right now. I cannot safely complete or save this request. Please call back later.";
@@ -257,6 +261,13 @@ export function buildAssistantConfig({
       position: { x: 1300, y: 180 },
     },
     {
+      id: "n_reservations_unavailable",
+      type: "speak",
+      name: "Reservations Unavailable",
+      message: RESERVATIONS_UNAVAILABLE_MESSAGE,
+      position: { x: 260, y: 360 },
+    },
+    {
       id: "n_goodbye",
       type: "speak",
       name: "Goodbye",
@@ -273,6 +284,12 @@ export function buildAssistantConfig({
   ];
 
   const edges = [
+    edge(
+      "e_greeting_support_failure",
+      "n_greeting",
+      "n_technical_failure",
+      variableEquals("call_support_available", "false"),
+    ),
     edge("e_greeting_identify", "n_greeting", "n_identify", fallback()),
     edge(
       "e_identify_support_failure",
@@ -281,10 +298,12 @@ export function buildAssistantConfig({
       variableEquals("call_support_available", "false"),
     ),
     edge(
-      "e_identify_reservations_disabled",
+      "e_identify_reservations_closed",
       "n_identify",
-      "n_escalate",
-      variableEquals("reservations_enabled", "false"),
+      "n_reservations_unavailable",
+      llm(
+        "reservations_enabled is false and the caller wants to make, check, or move a reservation.",
+      ),
     ),
     edge(
       "e_identify_manage",
@@ -326,7 +345,7 @@ export function buildAssistantConfig({
     edge(
       "e_reservation_disabled",
       "n_reservation",
-      "n_escalate",
+      "n_reservations_unavailable",
       variableEquals("reservations_enabled", "false"),
     ),
     edge(
@@ -367,7 +386,7 @@ export function buildAssistantConfig({
     edge(
       "e_manage_disabled",
       "n_manage_booking",
-      "n_escalate",
+      "n_reservations_unavailable",
       variableEquals("reservations_enabled", "false"),
     ),
     edge(
@@ -404,7 +423,7 @@ export function buildAssistantConfig({
     edge(
       "e_confirm_disabled",
       "n_confirm",
-      "n_escalate",
+      "n_reservations_unavailable",
       variableEquals("reservations_enabled", "false"),
     ),
     edge(
@@ -508,6 +527,12 @@ export function buildAssistantConfig({
     edge(
       "e_technical_goodbye",
       "n_technical_failure",
+      "n_goodbye",
+      fallback(),
+    ),
+    edge(
+      "e_unavailable_goodbye",
+      "n_reservations_unavailable",
       "n_goodbye",
       fallback(),
     ),

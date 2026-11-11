@@ -3,8 +3,8 @@
 > Read together with `AGENTS.md` and `code_challenge.md`. If this file conflicts with
 > `code_challenge.md`, flag the conflict instead of silently picking one.
 > Values marked **PLACEHOLDER** are demo data and can be edited freely.
-> Revision 3: MCP is required in Phase 1; booking, callback, failure, and privacy rules
-> are now explicit. See the scaffold at `hong-kong-cafe/`.
+> Revision 4: nine MCP tools, 16-node workflow, callbacks stored in the `CallSession` actor,
+> and the US phone number assigned. See the scaffold at `hong-kong-cafe/`.
 
 ## 1. Goal
 
@@ -25,7 +25,7 @@ The assistant can:
 ### In scope (required submission)
 - Conversation Workflow (speak nodes, prompt nodes, deterministic tool nodes, conditional edges)
 - Dynamic variables webhook on a Telnyx Edge Function; the reservation flag must affect routing
-- Public, authenticated MCP server exposing the six tools in section 9
+- Public, authenticated MCP server exposing the nine tools in section 9
 - Reservation logic (availability, booking, alternatives)
 - FAQ answers (hours, menu of the day, address)
 - Misunderstanding counter + callback request
@@ -63,7 +63,7 @@ of the deployed Phase 1 path.
 | MCP transport | **HTTP JSON-RPC** at `POST /mcp` | Implemented with a runtime-compatible SDK or a small stateless handler; verified before feature work. |
 | Reservation storage | **Stateful Actor with embedded SQLite** (`this.ctx.storage.sql`) | One actor instance per date |
 | Session state | **Stateful Actor** (key/value storage) | One actor instance per trusted call ID |
-| Flags / records / tokens | **Telnyx KV** via `env` binding | Feature flag, callback records, opaque session and selection tokens |
+| Flags / tokens | **Telnyx KV** via `env` binding | Feature flag, opaque session and selection tokens |
 | MCP auth | **Bearer token** from Edge secret | Never commit or expose the token in prompts/logs |
 | Static data | TypeScript constants in `src/data/` | Hours, address, weekly menu |
 | Runtime/deploy | **Telnyx Edge Compute** | `telnyx-edge ship` from `hong-kong-cafe/` |
@@ -95,7 +95,7 @@ Telnyx AI Assistant ── Conversation Workflow
                                         │              │
                                         └───────┬──────┘
                                                 ▼
-                                 KV: flag, callback,
+                                 KV: flag,
                                  session/selection tokens
 ```
 
@@ -170,8 +170,10 @@ hong-kong-cafe/
   will call back, and end. The counter never exceeds 3.
 - If the callback number cannot be understood after two re-asks, say the callback could not
   be saved and end honestly. Do not loop forever or claim success.
-- If `reservations_enabled` is `"false"`, route directly to callback handling without
-  incrementing the misunderstanding counter.
+- If `reservations_enabled` is `"false"`, FAQ still works. When the caller asks to book, check,
+  or move a reservation, an Identify Intent LLM edge (listed before the booking edges) routes to
+  a verbatim Reservations Unavailable speak node ("please call back later"), then Goodbye. No
+  details or callback number are collected and the misunderstanding counter is not touched.
 
 **Failure behavior**
 - MCP/business errors return a short voice-friendly failure and an error signal. The model
@@ -199,32 +201,42 @@ is never model-supplied. Prompt nodes contain only the tools needed for their st
 | 1 | Greeting | **speak** | Verbatim greeting + AI-assistant disclosure | none |
 | 2 | Identify Intent | prompt | Choose reservation / FAQ / human / still unclear | none |
 | 3 | Intent Unclear | **tool** | Record failed intent after a re-ask | `record-intent-misunderstanding` |
-| 4 | Reservation | prompt | Collect date/time/party; check availability; offer alternatives | `check_availability` |
+| 4 | Reservation | prompt | Collect date/time/party/seating; check weather and availability; offer alternatives | `check_availability`, `check_weather` |
 | 5 | Reservation Unclear | **tool** | Record failed reservation extraction | `record-reservation-misunderstanding` |
 | 6 | Confirm Booking | prompt | Collect name/phone, read back, get clear yes, create reservation | `create_reservation` |
 | 7 | Confirmation Unclear | **tool** | Record failed confirmation extraction | `record-confirmation-misunderstanding` |
-| 8 | Answer FAQ | prompt | Answer hours/address/menu; handle follow-ups | `get_restaurant_info`, `get_daily_menu` |
-| 9 | FAQ Unclear | **tool** | Record failed FAQ intent/value | `record-faq-misunderstanding` |
-| 10 | Escalate | prompt | Collect callback number, read back, save | `request_callback` |
-| 11 | Technical Failure | **speak** | Honest verbatim service-unavailable message | none |
-| 12 | Goodbye | **speak** | Verbatim closing line | none |
-| 13 | Hangup | **tool** | End the call | built-in hangup |
+| 8 | Check Or Change Booking | prompt | Verify name/surname + phone + date, read back the booking, move it to a new date | `lookup_reservation`, `change_reservation_date` |
+| 9 | Manage Booking Unclear | **tool** | Record failed booking-lookup extraction | `record-reservation-misunderstanding` |
+| 10 | Answer FAQ | prompt | Answer hours/address/menu; handle follow-ups | `get_restaurant_info`, `get_daily_menu` |
+| 11 | FAQ Unclear | **tool** | Record failed FAQ intent/value | `record-faq-misunderstanding` |
+| 12 | Escalate | prompt | Collect callback number, read back, save | `request_callback` |
+| 13 | Technical Failure | **speak** | Honest verbatim service-unavailable message | none |
+| 14 | Reservations Unavailable | **speak** | Verbatim "not taking reservations, call back later" when the flag is false | none |
+| 15 | Goodbye | **speak** | Verbatim closing line | none |
+| 16 | Hangup | **tool** | End the call | built-in hangup |
 
 **Required edges and priorities**
-- Greeting → Identify Intent (default).
-- At Identify Intent, variable edges run first, in this order:
-  - `call_support_available == "false"` → Technical Failure.
-  - `reservations_enabled == "false"` → Escalate.
-- Identify Intent LLM edges: reservation → Reservation; FAQ → Answer FAQ; explicit human →
-  Escalate; still unclear after one re-ask → Intent Unclear.
+- Greeting: `call_support_available == "false"` → Technical Failure; default → Identify
+  Intent.
+- At Identify Intent, the variable edge `call_support_available == "false"` → Technical
+  Failure runs first. The first LLM edge is "`reservations_enabled` is false and the caller
+  wants to make, check, or move a reservation" → Reservations Unavailable → Goodbye.
+- Identify Intent LLM edges: reservation → Reservation; check/move existing booking →
+  Check Or Change Booking; FAQ → Answer FAQ; explicit human → Escalate; still unclear after
+  one re-ask → Intent Unclear.
 - Reservation LLM edges: caller accepts a concrete slot → Confirm Booking; party >10 or
-  explicit human → Escalate; cannot extract after one re-ask → Reservation Unclear.
-- Add variable edges from Reservation and Confirm Booking for
-  `reservations_enabled == "false"` → Escalate so the hard rule is not left to the model.
+  explicit human → Escalate; caller no longer wants to book → Goodbye; cannot extract after
+  one re-ask → Reservation Unclear.
+- Add variable edges from Reservation, Confirm Booking, and Check Or Change Booking for
+  `reservations_enabled == "false"` → Reservations Unavailable so the hard rule is not left
+  to the model.
 - Confirm Booking LLM edges: clear yes and details confirmed → invoke `create_reservation`
-  in that node, then route on its result: success → Goodbye; slot taken → Reservation with
-  fresh alternatives; explicit human → Escalate; repeated unclear/no confirmation →
-  Confirmation Unclear.
+  in that node, then route on its result: success → Goodbye; slot taken or caller changes the
+  slot → Reservation with fresh alternatives; declined → Goodbye; tool failure → Technical
+  Failure; explicit human → Escalate; repeated unclear/no confirmation → Confirmation Unclear.
+- Check Or Change Booking LLM edges: finished → Goodbye; explicit human or `not_found` with
+  an accepted callback → Escalate; operational tool failure → Technical Failure; repeated
+  unclear details → Manage Booking Unclear.
 - Answer FAQ LLM edges: more questions → stay; finished → Goodbye; explicit human →
   Escalate; repeated unclear request → FAQ Unclear.
 - Each `* Unclear` tool node has exactly one default edge. Route
@@ -247,7 +259,7 @@ are safe values because a timeout falls back to them.
 
 | Variable | Source | Used for |
 |---|---|---|
-| `reservations_enabled` | KV feature flag, safe fallback `"false"` | **Routing** to callback-only flow |
+| `reservations_enabled` | KV feature flag, safe fallback `"false"` | **Routing** to the reservations-unavailable rejection |
 | `call_support_available` | Whether session KV can be initialized, safe fallback `"false"` | **Routing** to Technical Failure |
 | `call_session_token` | Random opaque token; KV maps it to trusted `call_control_id` with a 4-hour TTL | MCP tools resolve trusted per-call state |
 | `is_open_now` | Hours + HK time | Greeting wording |
@@ -268,7 +280,7 @@ must mask the number. The dynamic-variables response must be wrapped in
 | `reservations_enabled` flag | **KV**, default safe value when missing | Toggle behaviour without redeploying |
 | Call session token → trusted call ID | **KV**, random token, 4-hour TTL | Lets MCP tools resolve trusted per-call identity without trusting a model-supplied call ID |
 | Selection token → validated slot | **KV**, random token, 10-minute TTL | Binds creation to a server-validated date/time/party choice and serves as booking idempotency key |
-| Callback record for staff | **KV**, write once, 30-day TTL | Single write; retries return the same saved record; no read-modify-write |
+| Callback record for one call | **`CallSession` actor** (same instance as the counter) | One callback per call; first save wins and retries return `already_saved`; no separate KV record, hashing, or TTL logic |
 | Hours, address, weekly menu | **Constants in code** | Static, changes only on redeploy; no storage needed |
 
 **Storage decision (why not standalone SQLite):** Telnyx functions are containers, and a
@@ -280,8 +292,10 @@ there. Sharding by date also avoids a single global actor.
 is no cross-date query. The availability service checks one date at a time. A "list all
 upcoming reservations" staff view would need a separate data design.
 
-Callback values contain personal data: store only in the KV record, mask phone numbers in
-logs, do not include them in demo screenshots, and define a 30-day cleanup through TTL.
+Callback values contain personal data: store only in the per-call actor record, mask phone
+numbers in logs, and do not include them in demo screenshots. A fresh callback also sends a
+best-effort Resend summary email to `BOOKING_NOTIFICATION_EMAIL` (currently only the Resend
+account owner, because of the sandbox sender).
 
 ## 9. Required HTTP and MCP interfaces
 
@@ -297,9 +311,12 @@ REST calls with MCP-like names.
 | `get_restaurant_info` | `topic`: `hours` or `address` | matching text values |
 | `get_daily_menu` | optional `date` (`YYYY-MM-DD`) | resolved date, weekday, dinner items |
 | `check_availability` | `date`, `time`, `party_size` | `available`, requested result, up to 3 `alternatives`, and `selection_token` for a valid requested slot |
-| `create_reservation` | `selection_token`, `name`, `phone` | confirmation id/details, `slot_taken` + fresh alternatives, or honest failure |
-| `record_misunderstanding` | `session_token`, `stage` | new `count`, `should_escalate`, recorded status |
-| `request_callback` | `session_token`, `phone`, optional `name` | saved callback id or honest failure |
+| `create_reservation` | `selection_token`, `name`, `phone`, optional `seating`, `remark` | confirmation id/details, `slot_taken` + fresh alternatives, or honest failure |
+| `check_weather` | `date` | deterministic demo forecast; weekend rain closes outdoor seating |
+| `lookup_reservation` | `name` or surname, `phone`, `date` | the booking with a masked phone, or an identical `not_found` for any mismatch |
+| `change_reservation_date` | `name` or surname, `phone`, `current_date`, `new_date` | booking moved at the same time, or alternatives / `not_found` |
+| `record_misunderstanding` | `session_token`, `stage` | new `count`, `should_escalate`, recorded status; not attached to the Assistant, used by smoke tests (the workflow uses the signed shared tools below) |
+| `request_callback` | `session_token`, `phone`, optional `name` | `saved` or `already_saved`, or honest failure |
 
 Dates are `YYYY-MM-DD`, times are 24-hour `HH:mm`, and all date rules use
 `Asia/Hong_Kong`. MCP/business responses are short, structured, and voice-friendly. Invalid
@@ -377,11 +394,12 @@ Still to verify or watch:
    verification pending.
 8. [x] Implement pure time/capacity/alternative logic with focused tests.
 9. [x] Implement and live-verify atomic bookings, idempotency, concurrency, and persistence.
-10. [x] Implement and live-verify `CallSession`, callbacks, and all six MCP tools.
+10. [x] Implement and live-verify `CallSession`, callbacks, and all nine MCP tools.
 11. [x] Instrument logs, readiness, metrics, correlation, and failure responses.
-12. [ ] Configure the phone number (explicitly deferred by the user); Assistant, workflow, and
-    MCP server are otherwise configured.
-13. [ ] Run the full functional/routing live-call matrix; MCP, booking, concurrency, callback,
+12. [x] Assign the US number `+1 603 471 5321` to the Assistant (a Hong Kong number costs
+    75 USD).
+13. [ ] Run the full functional/routing live-call matrix; the reservations-disabled flow is
+    owner-verified live. MCP, booking, concurrency, callback,
     and persistence portions have passed.
 14. [x] Finish README, architecture diagram, demo script, and evidence-based debugging story.
 

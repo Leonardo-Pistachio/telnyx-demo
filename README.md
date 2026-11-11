@@ -1,322 +1,316 @@
-# Hong Kong Cafe Voice Assistant
+# Hong Kong Cafe — Telnyx Voice AI Receptionist
 
-A Telnyx voice-assistant POC for a fictional Hong Kong restaurant. Callers can book a table,
-ask about opening hours, the address, or the dinner menu, and request a callback when they
-cannot be understood or the restaurant is unavailable. Availability, bookings, call sessions,
-and callbacks are backed by Telnyx Edge primitives.
+A phone receptionist for a fictional Hong Kong restaurant. Callers can **book a table**,
+**check or move an existing booking**, ask about **hours, address, or today's dinner menu**,
+and **request a human callback**. Everything runs on Telnyx: an AI Assistant with a 16-node
+Conversation Workflow, a public MCP server, and a dynamic-variables webhook, all served by one
+Telnyx Edge Function backed by KV and two Stateful Actors.
 
-The backend and MCP server are deployed and live-verified. The Telnyx Assistant and 13-node
-workflow are provisioned, and the phone number `+1 603 471 5321` is assigned to the Assistant.
-Real phone calls, Telnyx-signed dynamic-variable delivery, and the full spoken workflow are not
-yet verified; do not present the phone demo as complete until they have been exercised.
+## Live endpoints
 
-## What is implemented
+| Item | Value |
+| --- | --- |
+| Phone number | **+1 603 471 5321** (US number, see [Limitations](#limitations)) |
+| Edge Function | `https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com` |
+| MCP server | `POST <function-url>/mcp` with `Authorization: Bearer <MCP_API_KEY>` |
+| Dynamic variables | `POST <function-url>/webhook/dynamic-vars` (Telnyx Ed25519 signed) |
+| Health | `GET <function-url>/readyz` |
+| Assistant ID | `assistant-4df34ebc-c6b6-4efa-8996-ecc81b9d9a7b` |
 
-- Public MCP Streamable HTTP endpoint with bearer authentication and nine tools.
-- Telnyx Assistant and 13-node Conversation Workflow provisioned through the API, including
-  speak nodes, scoped prompt nodes, deterministic misunderstanding tool nodes, and conditional
-  expression/LLM edges.
-- Signed dynamic-variables webhook with KV-backed reservation and call-support routing.
-- Hong Kong timezone slot generation, 60-minute reservations, capacity checks, same-day and
-  next-day alternatives, and a 10-guest booking limit.
-- Guarded booking retrieval and date changes by name (or surname), phone, and current date;
-  mismatches all return the same not-found result.
-- Inside/outside seating preference with a deterministic demo weather check: weekends are
-  rainy and outdoor seating is closed, weekdays are sunny and open.
-- Optional special-occasion remark stored and summarized on the booking.
-- Best-effort Resend notification email with the booking summary to `BOOKING_NOTIFICATION_EMAIL`.
-- One `DayBookings` Stateful Actor per date, with SQLite, `transactionSync`, idempotency, and
-  concurrent last-seat protection.
-- One `CallSession` Stateful Actor per trusted call ID for the misunderstanding threshold and
-  the single callback request.
-- Random call-session and booking-selection tokens stored in KV. Model-generated call IDs are
-  never trusted.
-- One callback request per call, stored in the `CallSession` actor and emailed to the
-  restaurant; retries are idempotent.
-- Signed shared-webhook endpoints for deterministic workflow misunderstanding nodes.
-- Structured logs, dependency-aware readiness checks, tests, deployment scripts, and a real
-  debugging log.
+Try: *"A table for four this Friday at 7 pm, outside please"*, *"What's on the dinner menu
+today?"*, *"Can I move my booking to next Tuesday?"*, *"Can I talk to a person?"*
+
+## Why this use case
+
+Restaurant phone booking is a real multi-step problem that exercises every part of the
+challenge: a structured conversation (collect, check, confirm), tools with real side effects,
+per-entity state with a genuine race (two callers taking the last table), and a safe human
+handoff when the call goes wrong.
+
+## Telnyx components
+
+| Component | How it is used |
+| --- | --- |
+| AI Assistant (Assistants API) | Voice agent on Telnyx-hosted `moonshotai/Kimi-K2.6`, provisioned idempotently by `scripts/provision-assistant.mjs` |
+| Conversation Workflow | 16 nodes (4 speak, 6 prompt, 6 tool) with LLM and variable-comparison edges |
+| Dynamic Webhook Variables | Call-start variables that **route** the workflow and carry a trusted session token |
+| Edge Function | One Hono app serving the webhook, MCP server, and shared-tool endpoints; deployed with `telnyx-edge ship` |
+| KV | Reservation feature flag, call-session tokens, booking selection tokens |
+| Stateful Actors | `DayBookings` (one per date) and `CallSession` (one per call) |
+| Shared webhook tools | Deterministic misunderstanding counters with a hidden `call_control_id` |
+| Edge logs and metrics | Structured JSON logs, invocation and error metrics |
+| Telnyx Inference + OpenCode | AI coding models used to build the project |
+| Phone number | `+1 603 471 5321`, assigned to the Assistant |
 
 ## Architecture
 
-```text
-Caller
-  |
-  v
-Telnyx AI Assistant / Conversation Workflow
-  |                   |                         |
-  | dynamic vars      | MCP tools               | deterministic shared-tool nodes
-  v                   v                         v
-GET/POST signed       POST /mcp                 POST /webhook/misunderstanding/:stage
-webhook               (bearer auth)             (Telnyx Ed25519 signature)
-  \                   |                         /
-   +------------------+------------------------+
-                      |
-                      v
-              Hono Edge Function
-                      |
-        +-------------+-------------+
-        |             |             |
-        v             v             v
-   src/core       DayBookings    CallSession
-   pure logic     actor/date     actor/call
-        |             |             |
-        +-------------+-------------+
-                      |
-                      v
-      Telnyx KV: feature flag, session tokens,
-      booking-selection tokens, session mappings
+```mermaid
+flowchart LR
+  Caller(["Caller"]) -->|"PSTN: +1 603 471 5321"| WF
+  subgraph AI["Telnyx AI Assistant (Kimi-K2.6)"]
+    WF["Conversation Workflow<br/>16 nodes"]
+  end
+  WF -->|"call start, Ed25519 signed"| DV
+  WF -->|"MCP tools/call, Bearer token"| MCP
+  WF -->|"tool nodes, Ed25519 signed<br/>hidden call_control_id"| MU
+  subgraph EF["Telnyx Edge Function: hong-kong-cafe (Hono)"]
+    DV["POST /webhook/dynamic-vars"]
+    MCP["POST /mcp<br/>9 MCP tools"]
+    MU["POST /webhook/misunderstanding/:stage"]
+    CORE["src/core<br/>shared business rules"]
+    DV --> CORE
+    MCP --> CORE
+    MU --> CORE
+  end
+  CORE <--> KV[("Telnyx KV<br/>feature flag, session tokens,<br/>selection tokens")]
+  CORE <--> DB[["DayBookings actor<br/>one per date, SQLite"]]
+  CORE <--> CS[["CallSession actor<br/>one per call: counter + callback"]]
+  CORE -.->|"best effort"| EM["Resend summary email<br/>(owner only for now)"]
+  EF -.-> OBS["JSON logs, latency_ms,<br/>Edge metrics, /readyz"]
 ```
 
-The business logic under `src/core/` is HTTP-independent so both the MCP server and shared
-webhook tools use the same reservation and escalation rules.
+All three HTTP adapters call the same pure TypeScript rules in `src/core/`, so the MCP and
+webhook paths cannot disagree about reservations.
 
-## MCP interface
+## Conversation flow
 
-Endpoint: `POST <function-url>/mcp`
+```mermaid
+flowchart TD
+  G["Greeting<br/>speak: verbatim + AI disclosure"] -->|"var: call_support_available == false"| TF
+  G --> I["Identify Intent<br/>prompt"]
+  RU["Reservations Unavailable<br/>speak: call back later"] --> GB
+  I -->|"var: call_support_available == false"| TF["Technical Failure<br/>speak"]
+  I -->|"LLM: wants a booking while reservations_enabled == false"| RU
+  I -->|"LLM: new booking"| R["Reservation<br/>prompt: check_availability, check_weather"]
+  I -->|"LLM: check or move booking"| M["Check or Change Booking<br/>prompt: lookup, change date"]
+  I -->|"LLM: hours, address, menu"| F["Answer FAQ<br/>prompt: info, menu"]
+  I -->|"LLM: wants a human"| ESC
+  R -->|"LLM: slot available"| C["Confirm Booking<br/>prompt: create_reservation"]
+  C -->|"LLM: slot taken or caller changes slot"| R
+  R -->|"LLM: more than 10 guests or human"| ESC
+  M -->|"LLM: not found + callback, or human"| ESC
+  F -->|"LLM: human"| ESC
+  C -->|"LLM: booked or declined"| GB["Goodbye<br/>speak"]
+  M -->|"LLM: finished"| GB
+  F -->|"LLM: finished"| GB
+  ESC -->|"LLM: saved or declined"| GB
+  C -->|"LLM: tool failure"| TF
+  M -->|"LLM: tool failure"| TF
+  ESC -->|"LLM: cannot save"| TF
+  TF --> GB --> H["Hangup<br/>tool"]
+  I & R & C & M & F -.->|"LLM: still unclear after one re-ask"| U["Unclear tool node, one per stage<br/>signed webhook increments CallSession<br/>200 returns to the same node"]
+  U -->|"var: telnyx_last_tool_status_code == 409<br/>third miss"| ESC
+  U -->|"default: error"| TF
+```
 
-Authentication: `Authorization: Bearer <MCP_API_KEY>`.
+Workflow design decisions:
 
-| Tool | Purpose |
-| --- | --- |
-| `get_restaurant_info` | Hours or address |
-| `get_daily_menu` | Dinner menu for today or a given date |
-| `check_availability` | Validate a slot, return alternatives, issue a 10-minute selection token |
-| `create_reservation` | Atomically create a reservation using a selection token |
-| `record_misunderstanding` | Increment a trusted call session's misunderstanding count |
-| `request_callback` | Save one callback request per call and email it to the restaurant |
+- **Speak nodes** hold text that must be verbatim: greeting with AI disclosure, technical
+  failure, goodbye.
+- **Prompt nodes use `instructions_mode: "append"`** so the global guardrails (never invent a
+  booking, booking privacy, always pass the session token) stay active and each node only adds
+  its own step. `replace` would silently drop those guardrails.
+- **Variable-comparison edges** for anything that must not depend on the model: both dynamic
+  variable flags and `telnyx_last_tool_status_code`. With `reservations_enabled == "false"`
+  the caller is not rejected up front: FAQ questions still work, and only when they ask to book,
+  check, or move a reservation does Identify Intent route to the verbatim Reservations
+  Unavailable message. Reservation, Confirm, and Check/Change repeat the variable edge as a
+  backstop.
+- **LLM edges** only for conversational judgement: intent, slot accepted, caller finished.
+- **Trade-off:** LLM edges are flexible but non-deterministic, so the model never counts
+  misunderstandings. Unclear tool nodes call a signed shared webhook with the hidden preset
+  `call_id = {{call_control_id}}`; the `CallSession` actor returns `200`, or `409` on the third
+  miss.
+- **Tool scoping:** the Assistants API attaches MCP tools at assistant level (there is no
+  per-node selector), so each node's instructions name the only tools it may use, and
+  `record_misunderstanding` is excluded from the Assistant's allowed tools.
 
-The server supports MCP `initialize`, `tools/list`, and `tools/call` over stateless HTTP
-JSON-RPC.
+## MCP server
 
-## Telnyx-signed HTTP endpoints
+Why MCP instead of separate webhook tools: one authenticated endpoint, tool discovery through
+`tools/list`, JSON Schemas generated from zod and validated server-side, and the same tools can
+be tested with any MCP client (the smoke scripts use the official MCP SDK). The transport is
+stateless Streamable HTTP JSON-RPC (`initialize`, `tools/list`, `tools/call`) with
+constant-time bearer authentication.
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /webhook/dynamic-vars` | Return call-start dynamic variables |
-| `POST /webhook/misunderstanding/intent` | Record an intent misunderstanding |
-| `POST /webhook/misunderstanding/reservation` | Record a reservation misunderstanding |
-| `POST /webhook/misunderstanding/confirmation` | Record a confirmation misunderstanding |
-| `POST /webhook/misunderstanding/faq` | Record an FAQ misunderstanding |
-| `GET /readyz` | Check secrets, KV, and both Actor dependencies |
-
-The misunderstanding routes return `200` below the threshold, `409` at the third failure, and
-an operational error otherwise. Each is a distinct shared tool so workflow tool nodes can use
-hidden preset fields for the trusted `call_control_id`.
-
-Both signed routes verify `telnyx-signature-ed25519` and `telnyx-timestamp` against the raw
-body and reject timestamps outside a five-minute window.
-
-## State design
-
-| State | Storage | Reason |
+| MCP tool | Purpose | Reason |
 | --- | --- | --- |
-| Reservations | `DayBookings` actor per `YYYY-MM-DD`, embedded SQLite | Atomic capacity check and insert for one date |
-| Misunderstanding count | `CallSession` actor per trusted call ID | Serialized read-modify-write |
-| Reservation feature flag | KV | Change routing without redeploying |
-| Call-session token | KV, 4-hour TTL | Converts opaque tool input into a trusted call identity |
-| Booking selection | KV, 10-minute TTL | Binds creation to a server-validated slot and is the idempotency key |
-| Callback record | KV, 30-day TTL | Write-once record without a read-modify-write workflow |
+| `get_restaurant_info` | Opening hours or address | Grounds answers in data instead of model guesses |
+| `get_daily_menu` | Dinner menu for today or a date | The menu changes by weekday; the model cannot know it |
+| `check_availability` | Validates date, time, and party; offers up to 3 alternatives (same day, then the next 7 days); issues a 10-minute `selection_token` | The server, not the model, decides availability; the token pins the validated slot |
+| `check_weather` | Deterministic demo forecast (weekend rain, weekday sun) | Gates outdoor seating |
+| `create_reservation` | Atomic booking in that date's `DayBookings` actor | `selection_token` is the idempotency key, so retries never double-book |
+| `lookup_reservation` | Finds a booking by name or surname + phone + date | Privacy: every mismatch returns the same `not_found` |
+| `change_reservation_date` | Moves a verified booking to a new date at the same time | Re-verifies identity, then moves the row between date actors |
+| `request_callback` | Saves one callback per call in `CallSession` and emails a summary (owner only, see [Limitations](#limitations)) | Human handoff; retries return `already_saved` |
+| `record_misunderstanding` | Increments the per-call counter | Smoke tests only; the workflow uses signed tool nodes instead |
 
-## Setup
+## Dynamic webhook variables
 
-Requirements:
+Called at call start. The function verifies the Ed25519 signature and a five-minute timestamp
+window, then returns `{ "dynamic_variables": { ... } }`.
 
-- Node.js 22.12 or newer.
-- `telnyx-edge` v0.5.17 or a newer actor-capable release.
-- An authenticated Telnyx account.
+| Variable | Source | Effect on the call |
+| --- | --- | --- |
+| `call_support_available` | `"true"` only when a session token was written to KV | `"false"` **routes** to Technical Failure |
+| `reservations_enabled` | KV key `feature/reservations_enabled` | `"false"` **routes** a booking request to a verbatim "not taking reservations, please call back later" message (FAQ still answered), without redeploying |
+| `call_session_token` | Random token mapped to the trusted `call_control_id` in KV (4 h TTL) | Passed to MCP tools so the server never trusts a model-supplied call ID |
+| `today_date`, `is_open_now` | Hong Kong clock | Resolves "tomorrow" or "Friday" correctly |
+| `restaurant_name`, `restaurant_address` | Static data | Greeting and FAQ wording |
+
+Both routing variables default to `"false"` on the Assistant, so a webhook timeout fails safe.
+
+## State: Actor vs KV vs plain code
+
+| State | Primitive | Why |
+| --- | --- | --- |
+| Reservations for one date | `DayBookings` actor, embedded SQLite + `transactionSync` | Capacity check + insert is a read-modify-write; the single-threaded actor prevents double-booking. Sharding by date avoids one global bottleneck |
+| Misunderstanding count and callback for one call | `CallSession` actor | Per-call increments must never be lost; the first callback wins |
+| Reservation feature flag | KV | Read-mostly; changes workflow routing without a redeploy |
+| Session and selection tokens | KV with TTL | Short-lived lookups, no read-modify-write, automatic expiry |
+| Hours, address, menu | Code constants | Static; changes ship with the code |
+
+Trade-off: an actor's SQLite is private, so there is no cross-date query. A staff view of all
+bookings would need a different design.
+
+## Edge cases and failure handling
+
+- Requested slot full: up to 3 nearest same-day times. Whole day full: first available day
+  within 7 days. Nothing found: callback.
+- Parties over 10 go to callback; past times, dates beyond 30 days, and invalid party sizes
+  are rejected.
+- Two callers racing for the last seats: one `confirmed`, one `slot_taken` with fresh
+  alternatives (live-verified).
+- Retrying a booking with the same token returns `already_confirmed` and uses no extra seats.
+- Tool errors tell the model "Do not assume it succeeded"; the workflow then plays a verbatim
+  Technical Failure message instead of claiming success.
+- Outside seating on a rainy day: indoor is offered. Wrong name, phone, or date on lookup:
+  identical `not_found`.
+- Signed webhooks reject bad signatures and stale timestamps (`403`); MCP rejects a missing or
+  wrong bearer token (`401`).
+- Phone numbers are masked in logs; session and selection tokens are never logged. The booking
+  email is internal and never mentioned to callers.
+
+## Observability
+
+Every request logs one JSON line with `timestamp`, `event`, `request_id`, trusted
+`correlation_id`/`call_id`, masked `caller`, `route`, `node`, `tool`, `outcome`,
+`error_code`, and `latency_ms`.
+
+Signals beyond logs:
+
+- `latency_ms` on every webhook and MCP call, plus Edge invocation and error metrics.
+- `GET /readyz` probes secrets, KV, and both actors.
+- One call can be traced Assistant → dynamic variables → KV → MCP → Actor through its
+  `call_control_id`, which MCP calls recover from the opaque session token.
+
+**How I would know within a minute that the assistant is broken, and what I'd check first:**
+
+1. `telnyx-edge metrics hong-kong-cafe --errors`: a 5xx spike, or invocations dropping to zero
+   while calls are expected.
+2. `curl <function-url>/readyz`: shows which dependency is down.
+3. `telnyx-edge logs hong-kong-cafe --type runtime --since 15m`: filter on `"outcome":"failed"`,
+   `mcp_rejected`, or `dynamic_variables_rejected`, then follow the failing call's `call_id`.
+
+If the Edge side is healthy but calls still fail, the fault is on the Assistant side
+(workflow, MCP attachment, or phone routing).
+
+## Debugging story
+
+Full evidence trail: [DEBUG_LOG.md](DEBUG_LOG.md). The hardest bug:
+
+- **Symptom:** callers heard "technical issue saving the callback".
+- **Signal:** runtime logs for that call showed `dynamic_variables_resolved` and two
+  `request_callback` calls ending in `mcp_error`, but **no** `callback_saved` or
+  `callback_failed` event. The missing service-level event proved the handler exited before
+  the callback service, at zod validation, which logged nothing.
+- **Cause:** the model sometimes sent the phone number as a JSON number; the string schema
+  rejected it, and the Escalate node treated that as a system failure.
+- **Fix:** coerce numeric phones, log invalid arguments by field name only, re-ask instead of
+  failing, and store the callback in the `CallSession` actor. Verified live: `saved`, then
+  `already_saved` on retry, with `callback_email_sent` logged exactly once.
+
+Other real bugs: the reservations-disabled flag still led callers into booking or callback
+questions because the only check sat on a prompt node (see [DEBUG_LOG.md](DEBUG_LOG.md));
+MCP returned `503` because Edge secrets live in `process.env`, not the `env`
+binding; live KV rejected `:` in keys; the first deploy stayed pending for about 21 minutes
+(shown by deployment JSON and a `409` on re-ship, not an application crash).
+
+## Telnyx Inference via OpenCode
+
+- `@telnyx/opencode` is enabled in [.opencode/opencode.json](.opencode/opencode.json) and
+  [.opencode/tui.json](.opencode/tui.json), authenticated with
+  `opencode auth login --provider telnyx --method "API Key"`.
+- Coding models, from OpenCode session history for this repository: mainly
+  `deepseek-ai/DeepSeek-V4.1-Flash-1017`, plus `moonshotai/Kimi-K3`,
+  `moonshotai/Kimi-K3.1-Pro`, `zai-org/GLM-5.2`, and `openai/gpt-oss-120b`.
+- The Assistant itself runs on Telnyx-hosted `moonshotai/Kimi-K2.6`.
+
+## Limitations
+
+- **Phone number:** linking the Assistant to a Hong Kong number costs 75 USD, so it is
+  connected to the US number **+1 603 471 5321** instead. I am not able to validate it by
+  calling from my own phone, so the spoken workflow has not been verified end to end over a
+  real phone call. I did confirm the reservations-disabled flow in a live test: with the KV flag
+  off, FAQ questions are answered and a booking request gets the "call back later" message. The
+  backend, MCP server, actors, KV, idempotency, concurrency, and callbacks
+  are live-verified with the smoke scripts (see [DEBUG_LOG.md](DEBUG_LOG.md)).
+- MCP tools cannot be scoped per workflow node through the Assistants API; node instructions
+  do the scoping.
+- Weather is a deterministic demo rule, not a live forecast.
+- **Email summaries:** in the current setup only I (the project owner) receive the booking and
+  callback summary emails. Resend's sandbox sender can only deliver to the Resend account
+  owner's address; sending to the restaurant or anyone else needs a verified domain and
+  `EMAIL_FROM`. Callers are never emailed.
+- English only; no cancellation, payments, SMS, or staff dashboard.
+
+## Setup and deployment
+
+Requires Node.js 22.12+ and an authenticated `telnyx-edge` CLI (v0.5.17+).
 
 ```bash
 cd hong-kong-cafe
 npm install
-npm run check
-telnyx-edge types
-```
-
-The function manifest is `hong-kong-cafe/telnyx.toml`. It declares `DAY_BOOKINGS`,
-`CALL_SESSION`, and `CAFE_KV`. `telnyx-env.d.ts` is generated; run `telnyx-edge types` after
-changing bindings or exported actor methods.
-
-### Secrets
-
-Secrets are organization-scoped, injected as `process.env` variables at deploy time, and must
-be present before shipping:
-
-```bash
-telnyx-edge secrets add MCP_API_KEY "<long-random-token>"
-telnyx-edge secrets add TELNYX_PUBLIC_KEY "<organization-public-key>"
-```
-
-Retrieve the Telnyx public key from `GET https://api.telnyx.com/v2/public_key` (the response
-field is `data.public`). Never commit either value. A local `.env.local` containing only the
-MCP test token is ignored by git.
-
-Adding or changing a secret requires another deploy.
-
-### KV feature flag
-
-The reservation flow fails closed when the flag is absent. To enable reservations:
-
-```bash
-telnyx-edge storage kv key put <kv-namespace-id> feature/reservations_enabled true
-```
-
-Set it to `false` to exercise the callback-only dynamic-variable routing path.
-
-## Deploy and provision
-
-```bash
-cd hong-kong-cafe
+npm run check                     # typecheck + vitest
+telnyx-edge secrets add MCP_API_KEY "<random-token>"
+telnyx-edge secrets add TELNYX_PUBLIC_KEY "<org-public-key>"
+telnyx-edge storage kv key put <kv-id> feature/reservations_enabled true
 telnyx-edge ship --yes
-telnyx-edge list
-telnyx-edge ship status hong-kong-cafe --logs
+
+# MCP server, shared tools, Assistant and workflow (idempotent)
+TELNYX_API_KEY=... MCP_API_KEY=... \
+FUNCTION_URL=https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com npm run provision:assistant
+
+# Live checks with the official MCP client
+export MCP_URL=<function-url>/mcp MCP_API_KEY=...
+npm run mcp:smoke
+npm run mcp:business-smoke        # booking, idempotency, last-seat race
 ```
 
-After the function URL is live, provision or update the MCP server, four shared webhook
-tools, and Assistant:
+Secrets are injected as `process.env` at deploy time, so re-ship after changing one. Run
+`telnyx-edge types` after changing actor bindings or exported actor methods.
 
-```bash
-cd hong-kong-cafe
-set -a
-source ../.env.local
-set +a
-TELNYX_API_KEY="<your-api-key>" \
-FUNCTION_URL="https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com" \
-npm run provision:assistant
-```
+## Stretch goals covered
 
-The script is idempotent by resource name and writes non-secret resource IDs to the ignored
-`workflow/generated-resources.json`. The provisioned Assistant ID is
-`assistant-4df34ebc-c6b6-4efa-8996-ecc81b9d9a7b` and the MCP server ID is
-`2eb46048-5446-4a39-8254-07de7f656ab0`. The phone number `+1 603 471 5321` (Telnyx connection
-`3089131497156773662`) is assigned to the Assistant. Its dynamic-variables webhook is
-`https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com/webhook/dynamic-vars`.
-
-Validate the public MCP endpoint with the official MCP client:
-
-```bash
-source ../.env.local
-MCP_URL="https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com/mcp" npm run mcp:smoke
-```
-
-The CLI monitor can time out while a server-side deploy continues. Check the function status
-and deployment JSON before treating it as a failure.
-
-Function: `hong-kong-cafe`
-Function ID: `ce4e4c94-b420-4c1c-8135-1619146f7e23`
-Assigned invoke URL: `https://hong-kong-cafe-ce4e4c94-b.telnyxcompute.com`
-
-The current revision was deployed successfully after an earlier platform deployment stalled for
-about 21 minutes. See `DEBUG_LOG.md` for the evidence trail and actual bugs found.
-
-## Live verification
-
-Verified against the deployed function on 2026-11-09:
-
-- `GET /readyz`: secrets, KV, `DayBookings`, and `CallSession` all healthy.
-- Official MCP SDK client: `initialize`, all six `tools/list` entries, and a real
-  `get_restaurant_info` `tools/call`.
-- Unauthenticated MCP request: `401`; unsigned dynamic-variable and misunderstanding webhooks:
-  `403`.
-- MCP booking: confirmed, then returned `already_confirmed` on an idempotent retry.
-- Two simultaneous last-seat requests: one success and one `slot_taken` conflict.
-- Misunderstanding counts: `1`, `2`, `3`, with escalation true at three.
-- Callback first save: `saved`; retry: `already_saved`.
-- Actor persistence: after two redeploys, the earlier test booking still consumed capacity.
-- MCP correlation: a trusted `call_id` was resolved from the opaque session token and logged;
-  the token itself was not logged.
-
-The business smoke tests intentionally created reservations for future dates
-`2026-11-19` and `2026-11-20` (Hong Kong time). Use other dates for a clean demo.
-
-## Testing
-
-```bash
-cd hong-kong-cafe
-npm run check   # typecheck followed by all vitest tests
-npm test
-```
-
-The suite covers timezone and boundary rules, alternatives, contact normalization, callback
-idempotency, trusted token mapping, signature validation, dynamic-variables HTTP behavior,
-misunderstanding thresholds, workflow graph invariants, an official MCP client transport, and
-a local MCP availability-to-booking flow. Actor concurrency, KV behavior, and public MCP
-behavior have also been exercised against the deployed function through the smoke scripts.
-
-## Observability
-
-Application logs are JSON lines with timestamp, event, request ID, route, outcome, latency,
-masked caller, tool/node when available, and the trusted call ID when an MCP request carries a
-resolvable session token. The session token itself is never logged. Key events include:
-
-- `dynamic_variables_resolved`
-- `dynamic_variables_rejected`
-- `misunderstanding_recorded`
-- `misunderstanding_rejected`
-- `mcp_request`
-- `mcp_rejected`
-- `unhandled_request_error`
-
-Useful checks:
-
-```bash
-telnyx-edge list
-telnyx-edge metrics hong-kong-cafe --since 15m
-telnyx-edge metrics hong-kong-cafe --errors
-telnyx-edge logs hong-kong-cafe --type invocations --since 15m
-telnyx-edge logs hong-kong-cafe --type runtime --since 15m
-```
-
-To determine within one minute whether the assistant is broken, check the Edge request/error
-metrics first. A jump in 5xx responses or a drop in successful invocations indicates a backend
-problem. Then read the corresponding invocation records and runtime JSON logs using the same
-time window; filter for `error_code`, `mcp_rejected`, or `dynamic_variables_rejected`. The
-call/session correlation is carried by the trusted call ID and opaque session token, never by
-logging the token itself. An Assistant-side failure with successful Edge metrics points to
-the workflow, tool attachment, or phone configuration instead.
-
-## Security and privacy
-
-- Dynamic variables and shared tool calls require Telnyx Ed25519 signatures.
-- The MCP endpoint fails closed without `MCP_API_KEY` and uses constant-time bearer comparison.
-- Model-supplied call IDs are resolved through random, expiring KV session tokens.
-- Booking details are only returned when the caller's name (or surname), phone number, and
-  booking date all match; every mismatch returns the same not-found result.
-- Phone numbers are masked in logs. Callback records retain the number only in KV until TTL.
-- Secrets, `.env.local`, generated local tooling, and `node_modules` are excluded from git.
-
-## Current limitations
-
-- The Assistant and workflow are provisioned, and phone number `+1 603 471 5321` is assigned.
-  Phone-oriented live testing is still incomplete until real calls are made.
-- Telnyx-signed dynamic-variable delivery and the spoken tool-node transitions cannot be fully
-  verified until a real phone call is made.
-- MCP tools are attached at Assistant level; the current Assistant API cannot select MCP tools
-  per workflow node. Node prompt instructions constrain tool use, while deterministic
-  shared-tool nodes handle failure routing.
-- No staff callback dashboard; callback requests are stored in the per-call actor and emailed
-  to the restaurant.
-- Weather is a deterministic demo forecast (weekend rain, weekday sun), not a live weather API.
-- Resend uses its sandbox sender, so notification email can only reach the Resend account
-  owner's address until a sending domain is verified and `EMAIL_FROM` is set.
-- No   payments, or multi-language support; date changes keep the original
-  time and party size.
+Variable-comparison edges, a KV feature flag that changes routing without a redeploy, custom
+dynamic variables that drive routing, and per-call correlation across Function → KV/Actor → MCP.
 
 ## Repository map
 
 ```text
-PROJECT_BRIEF.md           Requirements and implementation contract
-code_challenge.md          Original challenge
-DEMO_SCRIPT.md             Live-demo runbook and current prerequisites
-DEBUG_LOG.md               Evidence-based development debugging record
-AGENTS.md                  Repository commands, architecture, and agent constraints
-hong-kong-cafe/            Deployable Edge Function
-  src/actors/              Stateful Actors
-  src/core/                Pure business logic and services
-  src/routes/              Hono HTTP endpoints
-  src/mcp/                 MCP protocol and tools
-  scripts/                 Assistant provisioning and MCP smoke tests
-  workflow/                Executable Assistant/workflow configuration
-  tests/                   Vitest suite
-  telnyx.toml              Edge manifest and bindings
+DEMO_SCRIPT.md          Live-demo runbook
+DEBUG_LOG.md            Evidence-based debugging record
+PROJECT_BRIEF.md        Requirements and implementation contract
+.opencode/              OpenCode config with the Telnyx plugin
+hong-kong-cafe/
+  telnyx.toml           Edge manifest: actor and KV bindings
+  src/app.ts            Hono routes (src/index.ts exports the actors)
+  src/actors/           DayBookings, CallSession
+  src/core/             Pure business logic shared by MCP and webhooks
+  src/mcp/              MCP transport and nine tools
+  src/routes/           Dynamic variables, MCP, misunderstanding webhooks
+  workflow/             Assistant and workflow definition
+  scripts/              Provisioning and live smoke tests
+  tests/                Vitest suite
 ```
+

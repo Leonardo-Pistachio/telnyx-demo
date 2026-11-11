@@ -4,9 +4,11 @@
 
 - This is an implemented and deployed Telnyx Edge application under `hong-kong-cafe/`, with
   planning context in `PROJECT_BRIEF.md` and requirements in `code_challenge.md`. The public
-  MCP server, KV flows, Actors, Assistant, and 13-node workflow are provisioned and partially
-  live-verified. No phone number is assigned, so real-call/dynamic-webhook workflow testing is
-  incomplete.
+  MCP server, KV flows, Actors, Assistant, and 16-node workflow are provisioned and partially
+  live-verified. The US number `+1 603 471 5321` is assigned to the Assistant (a Hong Kong
+  number costs 75 USD), but the owner cannot call it from their own phone, so full real-call
+  and dynamic-webhook workflow testing is incomplete. The owner has confirmed the
+  reservations-disabled flow works in a live test (FAQ answered, booking request rejected).
 - Do not describe the phone demo or unexercised workflow paths as complete without evidence.
   Deployment and debugging evidence is in `DEBUG_LOG.md`; smoke scripts are under
   `hong-kong-cafe/scripts/`.
@@ -114,8 +116,9 @@ bundle/build. Do not add generic commands without updating this file.
   date-only moves, per-call callback storage in `CallSession`, and Resend delivery of booking
   and callback summaries to `BOOKING_NOTIFICATION_EMAIL` (currently the Resend account owner's
   address, because the sandbox key cannot send elsewhere without a verified domain).
-- Still required: assign a phone number, verify Telnyx-signed dynamic variables from a real
-  call, exercise every spoken workflow edge, and capture demo evidence.
+- Still required: verify Telnyx-signed dynamic variables from a real call to the assigned
+  number, exercise the remaining spoken workflow edges (booking, lookup/move, escalation), and
+  capture demo evidence.
 - Preserve real failing evidence in `DEBUG_LOG.md`; do not fabricate a debugging story.
 
 ## Deliverables and tooling
