@@ -12,6 +12,7 @@
     "check": "npm run typecheck && npm test",
     "mcp:smoke": "node scripts/mcp-smoke.mjs",
     "mcp:business-smoke": "node scripts/mcp-business-smoke.mjs",
+    "mcp:demo-smoke": "node scripts/mcp-demo-smoke.mjs",
     "mcp:session-smoke": "node scripts/mcp-session-smoke.mjs",
     "demo:seed": "node scripts/demo-seed.mjs",
     "provision:assistant": "node scripts/provision-assistant.mjs"

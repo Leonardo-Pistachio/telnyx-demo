@@ -22,6 +22,6 @@ telnyx-edge ship --yes
 | `src/actors/` | `DayBookings` and `CallSession` actors |
 | `src/core/` | Pure reservation, availability, callback, and token logic |
 | `src/routes/` | Dynamic variables, MCP, and signed misunderstanding routes |
-| `src/mcp/` | JSON-RPC transport and six MCP tools |
+| `src/mcp/` | JSON-RPC transport and nine MCP tools |
 | `src/lib/` | Logging, auth, secrets, signatures, and time helpers |
 | `tests/` | Vitest unit and local integration tests |

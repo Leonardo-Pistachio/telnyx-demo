@@ -12,19 +12,27 @@ yet verified; do not present the phone demo as complete until they have been exe
 
 ## What is implemented
 
-- Public MCP Streamable HTTP endpoint with bearer authentication and six tools.
+- Public MCP Streamable HTTP endpoint with bearer authentication and nine tools.
 - Telnyx Assistant and 13-node Conversation Workflow provisioned through the API, including
   speak nodes, scoped prompt nodes, deterministic misunderstanding tool nodes, and conditional
   expression/LLM edges.
 - Signed dynamic-variables webhook with KV-backed reservation and call-support routing.
-- Hong Kong timezone slot generation, 90-minute reservations, capacity checks, same-day and
-  next-day alternatives.
+- Hong Kong timezone slot generation, 60-minute reservations, capacity checks, same-day and
+  next-day alternatives, and a 10-guest booking limit.
+- Guarded booking retrieval and date changes by name (or surname), phone, and current date;
+  mismatches all return the same not-found result.
+- Inside/outside seating preference with a deterministic demo weather check: weekends are
+  rainy and outdoor seating is closed, weekdays are sunny and open.
+- Optional special-occasion remark stored and summarized on the booking.
+- Best-effort Resend notification email with the booking summary to `BOOKING_NOTIFICATION_EMAIL`.
 - One `DayBookings` Stateful Actor per date, with SQLite, `transactionSync`, idempotency, and
   concurrent last-seat protection.
-- One `CallSession` Stateful Actor per trusted call ID for the misunderstanding threshold.
+- One `CallSession` Stateful Actor per trusted call ID for the misunderstanding threshold and
+  the single callback request.
 - Random call-session and booking-selection tokens stored in KV. Model-generated call IDs are
   never trusted.
-- Write-once callback records with a 30-day TTL.
+- One callback request per call, stored in the `CallSession` actor and emailed to the
+  restaurant; retries are idempotent.
 - Signed shared-webhook endpoints for deterministic workflow misunderstanding nodes.
 - Structured logs, dependency-aware readiness checks, tests, deployment scripts, and a real
   debugging log.
@@ -57,7 +65,7 @@ webhook               (bearer auth)             (Telnyx Ed25519 signature)
                       |
                       v
       Telnyx KV: feature flag, session tokens,
-      booking-selection tokens, callbacks
+      booking-selection tokens, session mappings
 ```
 
 The business logic under `src/core/` is HTTP-independent so both the MCP server and shared
@@ -76,7 +84,7 @@ Authentication: `Authorization: Bearer <MCP_API_KEY>`.
 | `check_availability` | Validate a slot, return alternatives, issue a 10-minute selection token |
 | `create_reservation` | Atomically create a reservation using a selection token |
 | `record_misunderstanding` | Increment a trusted call session's misunderstanding count |
-| `request_callback` | Save an idempotent callback request |
+| `request_callback` | Save one callback request per call and email it to the restaurant |
 
 The server supports MCP `initialize`, `tools/list`, and `tools/call` over stateless HTTP
 JSON-RPC.
@@ -272,6 +280,8 @@ the workflow, tool attachment, or phone configuration instead.
 - Dynamic variables and shared tool calls require Telnyx Ed25519 signatures.
 - The MCP endpoint fails closed without `MCP_API_KEY` and uses constant-time bearer comparison.
 - Model-supplied call IDs are resolved through random, expiring KV session tokens.
+- Booking details are only returned when the caller's name (or surname), phone number, and
+  booking date all match; every mismatch returns the same not-found result.
 - Phone numbers are masked in logs. Callback records retain the number only in KV until TTL.
 - Secrets, `.env.local`, generated local tooling, and `node_modules` are excluded from git.
 
@@ -284,8 +294,13 @@ the workflow, tool attachment, or phone configuration instead.
 - MCP tools are attached at Assistant level; the current Assistant API cannot select MCP tools
   per workflow node. Node prompt instructions constrain tool use, while deterministic
   shared-tool nodes handle failure routing.
-- No staff callback dashboard; callback records are stored for operations/tooling.
-- No cancellation, modification, SMS, payments, multi-language support, or weather logic.
+- No staff callback dashboard; callback requests are stored in the per-call actor and emailed
+  to the restaurant.
+- Weather is a deterministic demo forecast (weekend rain, weekday sun), not a live weather API.
+- Resend uses its sandbox sender, so notification email can only reach the Resend account
+  owner's address until a sending domain is verified and `EMAIL_FROM` is set.
+- No   payments, or multi-language support; date changes keep the original
+  time and party size.
 
 ## Repository map
 

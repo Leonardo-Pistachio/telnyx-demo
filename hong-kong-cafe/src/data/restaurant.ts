@@ -3,7 +3,7 @@ export const RESTAURANT = {
   address: "12 Example Street, Central, Hong Kong",
   openingTime: "11:30",
   closingTime: "22:00",
-  lastReservationTime: "20:30",
+  lastReservationTime: "21:00",
   capacity: 40,
   timezone: "Asia/Hong_Kong",
   openingDays: "daily",

@@ -17,17 +17,17 @@ describe("reservation validation", () => {
         date: "2026-11-09",
         time: "11:30",
         partySize: 4,
-        slotTimes: ["11:30", "12:00", "12:30"],
+        slotTimes: ["11:30", "12:00"],
       },
     });
   });
 
-  it("includes the last reservation at 20:30 and nothing later", () => {
+  it("includes the last reservation at 21:00 and nothing later", () => {
     expect(BOOKABLE_TIMES[0]).toBe("11:30");
-    expect(BOOKABLE_TIMES.at(-1)).toBe("20:30");
-    expect(bookedSlotTimes("20:30")).toEqual(["20:30", "21:00", "21:30"]);
+    expect(BOOKABLE_TIMES.at(-1)).toBe("21:00");
+    expect(bookedSlotTimes("21:00")).toEqual(["21:00", "21:30"]);
 
-    const tooLate = validateBookingRequest("2026-11-10", "21:00", 2, NOW);
+    const tooLate = validateBookingRequest("2026-11-10", "21:30", 2, NOW);
     expect(tooLate).toMatchObject({ ok: false, issue: "invalid_time" });
   });
 

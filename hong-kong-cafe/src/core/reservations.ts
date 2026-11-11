@@ -11,7 +11,7 @@ import {
 } from "../lib/time";
 
 export const SLOT_MINUTES = 30;
-export const RESERVATION_DURATION_MINUTES = 90;
+export const RESERVATION_DURATION_MINUTES = 60;
 export const MAX_PARTY_SIZE = 10;
 export const BOOKING_WINDOW_DAYS = 30;
 export const ALTERNATIVE_SEARCH_DAYS = 7;

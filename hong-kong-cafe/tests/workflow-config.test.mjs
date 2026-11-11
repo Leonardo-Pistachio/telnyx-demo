@@ -69,6 +69,7 @@ describe("Assistant workflow configuration", () => {
       "n_intent_unclear",
       "n_reservation_unclear",
       "n_confirmation_unclear",
+      "n_manage_unclear",
       "n_faq_unclear",
     ];
 
@@ -90,8 +91,8 @@ describe("Assistant workflow configuration", () => {
   });
 
   it("keeps MCP server surface larger than the Assistant allowlist", () => {
-    expect(MCP_TOOL_NAMES).toHaveLength(6);
-    expect(ASSISTANT_MCP_TOOLS).toHaveLength(5);
+    expect(MCP_TOOL_NAMES).toHaveLength(9);
+    expect(ASSISTANT_MCP_TOOLS).toHaveLength(8);
     expect(ASSISTANT_MCP_TOOLS).not.toContain("record_misunderstanding");
     expect(config.mcp_servers[0].allowed_tools).toEqual(
       ASSISTANT_MCP_TOOLS,

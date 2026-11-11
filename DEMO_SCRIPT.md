@@ -39,6 +39,21 @@ Expected readiness: secrets, KV, `DayBookings`, and `CallSession` are all true.
    - Show the availability MCP call and selection-token booking in the terminal logs.
    - Confirm the reservation is read back only after a clear yes.
 
+2a. **Seating, weather, and remark, 2 minutes.** Book a weekday table and ask to sit outside:
+   - The Assistant calls `check_weather`; a weekday is sunny, so outside is confirmed.
+   - Mention a birthday; the `remark` is stored and read back.
+   - Ask for a Saturday outside table: the weather tool returns rainy/outdoor closed and the
+     Assistant offers indoor seating instead.
+
+2b. **Guarded lookup and date change, 2 minutes.** Ask to check and move the booking:
+   - A surname is accepted only together with the phone number and booking date.
+   - Show the `lookup_reservation` result with a masked phone.
+   - Try a wrong phone: same `not_found` result, no booking details disclosed.
+   - Move the booking to a later weekday; the time stays the same and the old date lookup
+     returns `not_found`.
+   - Show the booking-summary email delivered to `BOOKING_NOTIFICATION_EMAIL` (the Resend
+     sandbox currently delivers only to the account owner's address).
+
 3. **Alternatives, 1 minute.** Request a slot already filled by the demo setup. Show up to three
    same-day alternatives; if applicable, demonstrate the next-day search. Confirm the Assistant
    checks availability again when the caller accepts a different time.

@@ -1,10 +1,23 @@
+import type {
+  PublicReservation,
+  SeatingPreference,
+} from "../actors/DayBookings";
 import type { AppBindings } from "../env";
 import { getHongKongNow, type HongKongNow } from "../lib/time";
 import { findAvailability } from "./availability";
 import { normalizeContact } from "./contact";
+import { sendBookingEmail } from "./email-service";
 import { validateBookingRequest } from "./reservations";
 import { readSelection } from "./tokens";
 import { loadSeatUsage } from "./availability-service";
+import { getWeather } from "./weather";
+
+export const MAX_REMARK_LENGTH = 200;
+
+export interface CreateReservationOptions {
+  seating?: SeatingPreference;
+  remark?: string;
+}
 
 export type CreateReservationResult =
   | {
@@ -16,6 +29,8 @@ export type CreateReservationResult =
         time: string;
         party_size: number;
         name: string;
+        seating: SeatingPreference;
+        remark: string;
       };
     }
   | {
@@ -24,17 +39,39 @@ export type CreateReservationResult =
         | "selection_expired"
         | "invalid_name"
         | "invalid_phone"
+        | "invalid_remark"
+        | "outdoor_unavailable"
         | "slot_taken"
         | "store_unavailable";
       message: string;
       alternatives?: Array<{ date: string; time: string }>;
     };
 
+function normalizeRemark(value: string | undefined): string | null {
+  if (value === undefined) return "";
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (trimmed.length > MAX_REMARK_LENGTH) return null;
+  return trimmed;
+}
+
+function publicReservation(reservation: PublicReservation) {
+  return {
+    reservation_id: reservation.reservation_id,
+    date: reservation.date,
+    time: reservation.time,
+    party_size: reservation.party_size,
+    name: reservation.name,
+    seating: reservation.seating,
+    remark: reservation.remark,
+  };
+}
+
 export async function createReservation(
   env: AppBindings,
   selectionToken: string,
   name: string,
   phone: string,
+  options: CreateReservationOptions = {},
   now: HongKongNow = getHongKongNow(),
 ): Promise<CreateReservationResult> {
   try {
@@ -71,6 +108,29 @@ export async function createReservation(
       };
     }
 
+    const remark = normalizeRemark(options.remark);
+    if (remark === null) {
+      return {
+        ok: false,
+        code: "invalid_remark",
+        message: `Please keep the special-occasion note under ${MAX_REMARK_LENGTH} characters.`,
+      };
+    }
+
+    const seating: SeatingPreference =
+      options.seating === "outside" ? "outside" : "inside";
+
+    if (seating === "outside") {
+      const weather = getWeather(validation.value.date);
+      if (!weather.outdoor_open) {
+        return {
+          ok: false,
+          code: "outdoor_unavailable",
+          message: `${weather.message} Would you like indoor seating instead?`,
+        };
+      }
+    }
+
     const bookings = env.DAY_BOOKINGS.idFromName(validation.value.date);
     const result = await bookings.book({
       bookingToken: selectionToken,
@@ -79,6 +139,8 @@ export async function createReservation(
       partySize: validation.value.partySize,
       name: contact.value.name!,
       phone: contact.value.phone,
+      seating,
+      remark,
     });
 
     if (!result.ok) {
@@ -102,16 +164,28 @@ export async function createReservation(
       };
     }
 
+    const reservation = publicReservation(result.reservation);
+
+    if (result.idempotent) {
+      return {
+        ok: true,
+        status: "already_confirmed",
+        reservation,
+      };
+    }
+
+    // Internal notification only: its outcome is logged, never returned to the
+    // Assistant, so the agent cannot claim an email was sent to the caller.
+    await sendBookingEmail({
+      ...reservation,
+      phone: result.reservation.phone,
+      created_at: result.reservation.created_at,
+    });
+
     return {
       ok: true,
-      status: result.idempotent ? "already_confirmed" : "confirmed",
-      reservation: {
-        reservation_id: result.reservation.reservation_id,
-        date: result.reservation.date,
-        time: result.reservation.time,
-        party_size: result.reservation.party_size,
-        name: result.reservation.name,
-      },
+      status: "confirmed",
+      reservation,
     };
   } catch {
     return {

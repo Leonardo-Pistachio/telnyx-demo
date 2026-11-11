@@ -71,3 +71,96 @@ still required before this fix can be verified live.
 **Follow-up:** After the corrected revision deployed, `GET /readyz` returned all four checks
 green. The official MCP client then completed `initialize`, `tools/list`, and `tools/call`
 against the public endpoint. The secret issue is fixed and live-verified.
+
+## 2026-11-11 — POC demo update: live verification and Resend sender restriction
+
+**Deployed:** 60-minute reservations with a 21:00 last slot, seating preference, special-
+occasion remark, weather tool, guarded lookup, and date-only moves. `GET /readyz` was green and
+the official MCP SDK client listed all nine tools.
+
+**Live demo smoke (`npm run mcp:demo-smoke`):**
+- `check_weather` returned sunny for a weekday and rainy for a Saturday.
+- An outside booking on a weekday was confirmed with `seating: "outside"` and the remark.
+- Lookup with only the surname returned the booking with a masked phone (`***4567`).
+- Lookup with the wrong phone returned the same `not_found` result.
+- `change_reservation_date` moved the booking to the next weekday, kept `15:00`, and the old
+  date lookup returned `not_found`.
+
+**Email failure:** The fresh confirmation attempted a Resend send and logged
+`booking_email_failed` with `status: 403`. The provider response was
+`{"message":"You can only send testing emails to your own email address
+(jackchan12382@gmail.com)...","name":"validation_error"}`. The booking remained confirmed;
+email failure did not roll it back.
+
+**Fix pending:** Verify a sending domain in Resend, set `EMAIL_FROM` to an address on that
+domain, and re-ship so the secret is baked into the runtime. Delivery to
+`imt183404@gmail.com` is not verified yet.
+
+**Resolved for the demo:** Per the owner's instruction, `BOOKING_NOTIFICATION_EMAIL` was
+changed to the Resend account owner's address (`jackchan12382@gmail.com`) and the function was
+re-shipped. The demo smoke then returned `email_sent: true`, and runtime logs recorded
+`booking_email_sent` (`result: res_e17bb227-4950-4b04-975b-e549408e36c6`). Delivery to
+`imt183404@gmail.com` still requires a verified domain plus `EMAIL_FROM`.
+
+**Not verified:** A real phone call; the workflow was re-provisioned but no number is attached.
+
+## 2026-11-11 — Assistant promised callers a confirmation email
+
+**Symptom:** Near the end of a call the assistant told the caller a confirmation email would
+be sent. The notification email is internal to the restaurant and must not be promised.
+
+**Cause:** The `create_reservation` MCP result included `email_sent: true/false`. The model saw
+that field and described it to the caller as a confirmation email.
+
+**Fix:** Removed `email_sent` from the booking-service/MCP result so the model receives no
+email signal; sending and its success/failure logging are unchanged. Added an explicit rule to
+the assistant instructions and the confirm node: never mention email or notifications to
+callers. Updated the MCP flow test to assert the field is absent and dropped it from the demo
+smoke output.
+
+**Verification:** Re-shipped and re-provisioned. The live `create_reservation` result no longer
+contains `email_sent`, while runtime logs still record `booking_email_sent`
+(`res_25e31157-c44f-488a-99f0-56bdad706199`), proving the internal email still sends. The
+spoken behavior must be confirmed on the next real call.
+
+## 2026-11-11 — Assistant repeated the booking confirmation
+
+**Symptom:** The assistant read the booking details back several times per call.
+
+**Cause:** Two pre-booking read-backs (reservation node slot read-back plus the confirm node
+full read-back) and a post-success read-back encouraged by the `e_confirm_booked` edge
+condition ("the confirmed reservation details were read to the caller").
+
+**Fix:** The reservation node now goes straight to confirmation after availability; the confirm
+node performs the only full read-back; after success the assistant says one short sentence with
+the date and time only; the booked edge now only requires that the caller was told the booking
+is confirmed.
+
+**Verification:** `npm run check` passed (70/70) and the assistant was re-provisioned. Fetching
+the live Assistant config confirmed all updated instruction text is active. The spoken result
+needs confirmation on the next real call.
+
+## 2026-11-11 — "Technical issue saving the callback information"
+
+**Symptom:** Callers heard a technical-failure message instead of a saved callback.
+
+**Evidence:** Runtime logs for a real call showed `dynamic_variables_resolved` success, then two
+`request_callback` MCP calls failing with `mcp_error`. No `callback_saved`/`callback_failed`
+tool event appeared, which meant the handler returned before calling the callback service —
+i.e. the Zod argument validation failed (that path logged nothing).
+
+**Cause:** The assistant sometimes sends the phone as a JSON number or an incomplete value;
+the strict string schema rejected it silently, and the escalate node treated any tool error as
+a system failure.
+
+**Fix:** Simplification requested by the owner: callback requests are no longer stored in KV
+with hashing/TTL/conflict logic. The trusted call's `CallSession` Stateful Actor now stores a
+single callback record (first save wins; retries return `already_saved`), and a fresh save
+sends a Resend summary email (same recipient configuration as booking emails). The
+`request_callback` schema now coerces numeric phones, logs invalid arguments by field name
+only, and the escalate node re-asks for the number instead of declaring a technical failure.
+
+**Verification:** `npm run check` passed (73/73). After deploy, the live session smoke returned
+`callback_first: saved` and `callback_retry: already_saved`; runtime logs recorded
+`callback_email_sent` (`cb_b58fdfb9-fbc3-4aea-b69e-3b7a2dbb4d69`) exactly once and only
+`already_saved` on the retry.

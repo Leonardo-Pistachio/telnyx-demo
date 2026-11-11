@@ -34,11 +34,20 @@ The assistant can:
 - Live phone testing, README, architecture diagram, demo script, debugging story
 
 ### Out of scope
-- Weather and outdoor-seating logic
 - Other stretch goals from `code_challenge.md`
-- Cancel / modify reservations, SMS confirmations, payments, multi-language
+- Cancel reservations, SMS confirmations, payments, multi-language
 - Staff dashboard or cross-date reservation listing
 - Standalone databases, ORM, queues, or external application hosting
+
+### POC demo update (post-brief)
+At the owner's request, the demo was later extended with:
+- a deterministic weather tool for outdoor seating (weekend = rainy/closed,
+  weekday = sunny/open),
+- inside/outside seating preference and a special-occasion remark on bookings,
+- guarded booking lookup and date-only changes by name/surname + phone + current date,
+- a best-effort Resend email summary to `BOOKING_NOTIFICATION_EMAIL`.
+
+These additions do not remove any mandatory Phase 1 path.
 
 Keep business logic in plain TypeScript modules (`src/core/`) with no HTTP code so the
 MCP and shared-webhook adapters use the same rules. MCP is not optional and must be part
@@ -113,11 +122,11 @@ hong-kong-cafe/
 **Restaurant info**
 - Name: Hong Kong Cafe
 - Address: 12 Example Street, Central, Hong Kong (**PLACEHOLDER**)
-- Opening hours: daily 11:30–22:00, last reservation 20:30 (**PLACEHOLDER**)
+- Opening hours: daily 11:30–22:00, last reservation 21:00 (**PLACEHOLDER**)
 
 **Reservation model (keep simple)**
-- Time slots are every **30 minutes** from 11:30 through 20:30, in `Asia/Hong_Kong`.
-- Each reservation occupies tables for **90 minutes** (three consecutive slots). A 20:30
+- Time slots are every **30 minutes** from 11:30 through 21:00, in `Asia/Hong_Kong`.
+- Each reservation occupies tables for **60 minutes** (two consecutive slots). A 21:00
   reservation ends exactly at closing (22:00).
 - Capacity: **40 seats** total at any moment (**PLACEHOLDER**). A booking fits if, for every
   occupied slot, `seats_in_use + party_size <= capacity`.
@@ -406,4 +415,5 @@ This matrix is exercised in separate test sessions so failures stay attributable
 - Never commit secrets. Use Edge secrets or an untracked local environment file.
 - Keep it simple: no extra frameworks, queues, external hosting, or standalone database.
 - MCP, phone workflow, observability, and live verification are required; do not defer them.
-- Ask before expanding scope; weather and other stretch goals stay out.
+- Ask before expanding scope; the initial stretch goals stayed out, while the owner later
+  requested the demo additions listed under "POC demo update (post-brief)".

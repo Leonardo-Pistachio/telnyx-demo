@@ -2,7 +2,10 @@ export const MCP_TOOL_NAMES = [
   "get_restaurant_info",
   "get_daily_menu",
   "check_availability",
+  "check_weather",
   "create_reservation",
+  "lookup_reservation",
+  "change_reservation_date",
   "record_misunderstanding",
   "request_callback",
 ];
@@ -11,7 +14,10 @@ export const ASSISTANT_MCP_TOOLS = [
   "get_restaurant_info",
   "get_daily_menu",
   "check_availability",
+  "check_weather",
   "create_reservation",
+  "lookup_reservation",
+  "change_reservation_date",
   "request_callback",
 ];
 
@@ -29,13 +35,18 @@ Current Hong Kong date: {{today_date}}. The restaurant is {{restaurant_name}} at
 Rules:
 - Never invent availability, a reservation, a callback, or restaurant information. Only state success after a successful tool result.
 - Use the tools listed in the active workflow node. Do not call unrelated tools.
-- Always pass exactly {{call_session_token}} as session_token on every MCP tool call, including every check_availability, create_reservation, and request_callback call. If that value is empty, do not call MCP tools; use the technical failure path. Never reveal or invent the token or a call ID.
+- Always pass exactly {{call_session_token}} as session_token on every MCP tool call, including every check_availability, check_weather, create_reservation, lookup_reservation, change_reservation_date, and request_callback call. If that value is empty, do not call MCP tools; use the technical failure path. Never reveal or invent the token or a call ID.
 - Resolve relative dates using the Hong Kong date above. Use YYYY-MM-DD dates and 24-hour HH:mm times with tools.
-- Book only after reading back the date, time, party size, name, and phone number and receiving a clear yes.
+- Reservations last one hour. The last bookable start time is 21:00. Each booking is for at most 10 guests; larger parties need a human callback.
+- During a new reservation, ask whether the guest prefers to sit inside or outside. If they choose outside, call check_weather for the booking date before agreeing. If outdoor seating is closed, say the outdoor area is not open that day because rain is expected and offer indoor seating instead. Never confirm outside seating unless check_weather reports outdoor_open true.
+- Ask whether the booking is for a special occasion or purpose, and pass a short note as remark when creating the reservation. Do not invent one.
+- Book only after reading back the date, time, party size, seating, name, and phone number once and receiving a clear yes. After the booking succeeds, give one short confirmation sentence with the date and time only; never repeat the other details.
 - A selection_token belongs to one date, time, and party size. If the caller changes any of them, check availability again.
-- Party sizes above 10 need a human callback.
-- If a tool fails or the result is unknown, say so honestly. Never claim a booking or callback was saved.
-- Do not ask for or speak a full phone number in a general greeting. For reservation or callback actions, collect and read it back.
+- Booking privacy: never reveal, confirm, or hint at any reservation detail unless lookup_reservation returned ok true for that caller after matching their name (or surname), phone number, and booking date. Never list or describe another guest's booking. If lookup_reservation returns not_found, apologise once, never say whether any booking exists, and offer a callback.
+- When a verified caller wants to change the date, keep the same time and call change_reservation_date only after confirming the new date. Do not promise a change before the tool returns ok true.
+- If a tool fails or the result is unknown, say so honestly. Never claim a booking, change, or callback was saved.
+- Never mention confirmation emails, notifications, or any email to callers. Booking summaries are sent internally to the restaurant only and are not for callers.
+- Do not ask for or speak a full phone number in a general greeting. For reservation, lookup, change, or callback actions, collect and read it back.
 - Keep responses concise and suitable for a phone call.`;
 
 const GREETING_MESSAGE =
@@ -170,7 +181,7 @@ export function buildAssistantConfig({
       type: "prompt",
       name: "Reservation",
       instructions:
-        "Collect the date, time, and party size. Use {{today_date}} to resolve relative dates. Call check_availability for the exact requested date, time, and party size. If it is available, read back the slot and ask whether the caller wants to proceed. If alternatives are returned, offer no more than three and call check_availability again for the alternative the caller selects. Do not create a reservation in this node. Route callers with more than 10 guests or who ask for a human to escalation. If details remain unclear after one re-ask, choose the unclear transition.",
+        "Collect the date, time, party size, and whether the guest wants to sit inside or outside. Use {{today_date}} to resolve relative dates. If they choose outside, call check_weather for that date first; when outdoor seating is closed, tell them rain is expected and offer indoor seating instead. Ask whether the booking is for a special occasion and remember a short note for the remark. Call check_availability for the exact requested date, time, and party size. If it is available, do not read the slot back yet; move to the confirmation step, where the details are read back exactly once. If alternatives are returned, offer no more than three and call check_availability again for the alternative the caller selects. Do not create a reservation in this node. Route callers with more than 10 guests or who ask for a human to escalation. If details remain unclear after one re-ask, choose the unclear transition.",
       instructions_mode: "append",
       position: { x: 520, y: 0 },
     },
@@ -186,7 +197,7 @@ export function buildAssistantConfig({
       type: "prompt",
       name: "Confirm Booking",
       instructions:
-        "Collect the guest name and phone number. Read back the exact date, time, party size, name, and phone number, and obtain a clear yes. Then call create_reservation with the selection_token from the accepted availability check and the confirmed contact details. If the tool confirms success, tell the caller the reservation is confirmed and choose the booked transition. If the slot was taken, offer the returned alternatives and choose the slot-taken transition. If the result is an operational error or remains unknown after retrying the same selection token once, never claim success and choose the tool-failure transition. If the caller wants a different date or time, choose the change-slot transition. If confirmation remains unclear after one re-ask, choose the unclear transition.",
+        "Collect the guest name and phone number. Read back the exact date, time, party size, seating, any special-occasion note, name, and phone number, and obtain a clear yes. Then call create_reservation with the selection_token from the accepted availability check, the confirmed contact details, the seating preference, and the remark. If seating is outside and the weather check said it closed, switch to inside instead. If the tool confirms success, say one short sentence confirming the booking date and time only, then choose the booked transition. Do not repeat the party size, seating, name, phone number, or remark after the booking is created. Never mention email or any notification to the caller. If the result code is outdoor_unavailable, apologise, offer indoor seating, and choose the change-slot transition. If the slot was taken, offer the returned alternatives and choose the slot-taken transition. If the result is an operational error or remains unknown after retrying the same selection token once, never claim success and choose the tool-failure transition. If the caller wants a different date or time, choose the change-slot transition. If confirmation remains unclear after one re-ask, choose the unclear transition.",
       instructions_mode: "append",
       position: { x: 780, y: 0 },
     },
@@ -196,6 +207,22 @@ export function buildAssistantConfig({
       name: "Confirmation Unclear",
       shared_tool_id: sharedToolIds.confirmation,
       position: { x: 780, y: 180 },
+    },
+    {
+      id: "n_manage_booking",
+      type: "prompt",
+      name: "Check Or Change Booking",
+      instructions:
+        "Handle an existing reservation that the caller wants to check or move to another date. Collect the booking name (a surname is enough), the phone number used for the booking, and the current booking date. Call lookup_reservation with all three. Only if it returns ok true may you read back the booking details. If it returns not_found, apologise once without confirming or denying any booking, never guess, and offer a callback; choose the human transition if the caller accepts. If verified and the caller wants another date, confirm the new date and call change_reservation_date with the same name, phone, current date, and new date. The time stays the same. Only read back the new date and time after ok true. If the new date is full at that time, offer no more than three returned alternatives and call change_reservation_date again for the alternative the caller chooses. If details are unclear after one re-ask, choose the unclear transition. If the caller asks for a human, choose the human transition. When the caller is finished, choose the finished transition.",
+      instructions_mode: "append",
+      position: { x: 1040, y: -180 },
+    },
+    {
+      id: "n_manage_unclear",
+      type: "tool",
+      name: "Manage Booking Unclear",
+      shared_tool_id: sharedToolIds.reservation,
+      position: { x: 1040, y: -360 },
     },
     {
       id: "n_faq",
@@ -218,7 +245,7 @@ export function buildAssistantConfig({
       type: "prompt",
       name: "Escalate",
       instructions:
-        "Apologise briefly and collect a callback phone number. Read it back and obtain confirmation. You may use {{telnyx_end_user_target}} only when the caller confirms that the number they are calling from is best. Call request_callback with {{call_session_token}}, the confirmed phone number, and an optional name. Only after the tool returns ok true say that a team member will call back. If the caller declines a callback, choose the declined transition. If the number cannot be understood after two re-asks or the callback cannot be saved, choose the failure transition and do not claim success.",
+        "Apologise briefly and collect a callback phone number. Read it back and obtain confirmation. You may use {{telnyx_end_user_target}} only when the caller confirms that the number they are calling from is best. Call request_callback with {{call_session_token}}, the confirmed phone number, and an optional name. Only after the tool returns ok true say that a team member will call back. If request_callback returns invalid_phone or invalid_arguments, the number was not captured correctly: apologise, collect and read back the full number again, then call the tool again. That is not a system failure. If the caller declines a callback, choose the declined transition. If the number cannot be understood after two re-asks, or request_callback fails twice or returns an operational error, choose the failure transition and do not claim success.",
       instructions_mode: "append",
       position: { x: 1040, y: 0 },
     },
@@ -260,10 +287,18 @@ export function buildAssistantConfig({
       variableEquals("reservations_enabled", "false"),
     ),
     edge(
+      "e_identify_manage",
+      "n_identify",
+      "n_manage_booking",
+      llm(
+        "The caller wants to check, retrieve, or move an existing reservation to another date.",
+      ),
+    ),
+    edge(
       "e_identify_reservation",
       "n_identify",
       "n_reservation",
-      llm("The caller wants to make, change, or discuss a table reservation."),
+      llm("The caller wants to make a new table reservation."),
     ),
     edge(
       "e_identify_faq",
@@ -299,7 +334,7 @@ export function buildAssistantConfig({
       "n_reservation",
       "n_confirm",
       llm(
-        "The caller accepted an available date and time from a successful check_availability result.",
+        "check_availability returned an available slot for the requested date, time, and party size.",
       ),
     ),
     edge(
@@ -330,6 +365,43 @@ export function buildAssistantConfig({
       "n_reservation",
     ),
     edge(
+      "e_manage_disabled",
+      "n_manage_booking",
+      "n_escalate",
+      variableEquals("reservations_enabled", "false"),
+    ),
+    edge(
+      "e_manage_finished",
+      "n_manage_booking",
+      "n_goodbye",
+      llm("The caller has finished checking or moving the reservation."),
+    ),
+    edge(
+      "e_manage_human",
+      "n_manage_booking",
+      "n_escalate",
+      llm(
+        "The caller explicitly asks for a human or callback, or lookup_reservation returned not_found and the caller accepts a callback.",
+      ),
+    ),
+    edge(
+      "e_manage_tool_failure",
+      "n_manage_booking",
+      "n_technical_failure",
+      llm(
+        "lookup_reservation or change_reservation_date failed operationally, or the result remains unknown after one retry.",
+      ),
+    ),
+    edge(
+      "e_manage_unclear",
+      "n_manage_booking",
+      "n_manage_unclear",
+      llm(
+        "The booking name, phone number, or date is still unclear after one clarifying re-ask.",
+      ),
+    ),
+    ...toolFailureEdges("manage", "n_manage_unclear", "n_manage_booking"),
+    edge(
       "e_confirm_disabled",
       "n_confirm",
       "n_escalate",
@@ -340,7 +412,7 @@ export function buildAssistantConfig({
       "n_confirm",
       "n_goodbye",
       llm(
-        "create_reservation returned ok true and the confirmed reservation details were read to the caller.",
+        "create_reservation returned ok true and the caller was told the booking is confirmed.",
       ),
     ),
     edge(
@@ -430,7 +502,7 @@ export function buildAssistantConfig({
       "n_escalate",
       "n_technical_failure",
       llm(
-        "The callback number could not be understood after two re-asks, or request_callback failed and no callback was saved.",
+        "The callback number could not be understood after two re-asks, or request_callback failed twice or with an operational error and no callback was saved.",
       ),
     ),
     edge(
@@ -445,7 +517,7 @@ export function buildAssistantConfig({
   return {
     name: "Hong Kong Cafe",
     description:
-      "Phone assistant for table reservations, FAQ, deterministic misunderstanding escalation, and callbacks.",
+      "Phone assistant for table reservations, booking lookup and date changes, weather-aware seating, FAQ, deterministic misunderstanding escalation, and callbacks.",
     model: "moonshotai/Kimi-K2.6",
     instructions: ASSISTANT_INSTRUCTIONS,
     greeting: "",

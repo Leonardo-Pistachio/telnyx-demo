@@ -42,6 +42,12 @@ export class FakeKv {
 
 class FakeCallSession {
   private count = 0;
+  callbacks: Array<{
+    callback_id: string;
+    name?: string;
+    phone: string;
+    created_at: string;
+  }> = [];
 
   async recordMisunderstanding(): Promise<MisunderstandingResult> {
     if (this.count >= 3) {
@@ -62,6 +68,32 @@ class FakeCallSession {
 
   async misunderstandingCount(): Promise<number> {
     return this.count;
+  }
+
+  async saveCallback(input: {
+    callbackId: string;
+    name?: string;
+    phone: string;
+    createdAt: string;
+  }) {
+    const existing = this.callbacks[0];
+    if (existing) {
+      return { status: "already_saved" as const, callback: existing };
+    }
+
+    const callback = {
+      callback_id: input.callbackId,
+      name: input.name,
+      phone: input.phone,
+      created_at: input.createdAt,
+    };
+    this.callbacks.push(callback);
+
+    return { status: "saved" as const, callback };
+  }
+
+  async getCallback() {
+    return this.callbacks[0] ?? null;
   }
 }
 
@@ -85,6 +117,8 @@ interface StoredReservation {
   party_size: number;
   name: string;
   phone: string;
+  seating: "inside" | "outside";
+  remark: string;
   created_at: string;
 }
 
@@ -101,8 +135,27 @@ class FakeDayBookings {
     return usage;
   }
 
+  private publicReservation(reservation: StoredReservation) {
+    return { ...reservation };
+  }
+
   async seatUsage(): Promise<DateSeatUsage> {
     return this.usage();
+  }
+
+  async findByPhone(phone: string) {
+    return this.reservations
+      .filter((reservation) => reservation.phone === phone)
+      .map((reservation) => this.publicReservation(reservation));
+  }
+
+  async remove(reservationId: string) {
+    const index = this.reservations.findIndex(
+      (reservation) => reservation.reservation_id === reservationId,
+    );
+    if (index === -1) return null;
+    const [removed] = this.reservations.splice(index, 1);
+    return removed ? this.publicReservation(removed) : null;
   }
 
   async book(input: BookingInput): Promise<BookingResult> {
@@ -113,15 +166,7 @@ class FakeDayBookings {
       return {
         ok: true,
         idempotent: true,
-        reservation: {
-          reservation_id: existing.reservation_id,
-          date: existing.date,
-          time: existing.time,
-          party_size: existing.party_size,
-          name: existing.name,
-          phone: existing.phone,
-          created_at: existing.created_at,
-        },
+        reservation: this.publicReservation(existing),
       };
     }
 
@@ -135,13 +180,16 @@ class FakeDayBookings {
     }
 
     const reservation: StoredReservation = {
-      reservation_id: `res_${crypto.randomUUID()}`,
+      reservation_id:
+        input.reservationId ?? `res_${crypto.randomUUID()}`,
       booking_token: input.bookingToken,
       date: input.date,
       time: input.time,
       party_size: input.partySize,
       name: input.name,
       phone: input.phone,
+      seating: input.seating === "outside" ? "outside" : "inside",
+      remark: input.remark ?? "",
       created_at: new Date().toISOString(),
     };
     this.reservations.push(reservation);
@@ -149,15 +197,7 @@ class FakeDayBookings {
     return {
       ok: true,
       idempotent: false,
-      reservation: {
-        reservation_id: reservation.reservation_id,
-        date: reservation.date,
-        time: reservation.time,
-        party_size: reservation.party_size,
-        name: reservation.name,
-        phone: reservation.phone,
-        created_at: reservation.created_at,
-      },
+      reservation: this.publicReservation(reservation),
     };
   }
 }

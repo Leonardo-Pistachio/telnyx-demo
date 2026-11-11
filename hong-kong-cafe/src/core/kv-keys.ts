@@ -7,7 +7,3 @@ export function sessionKey(token: string): string {
 export function selectionKey(token: string): string {
   return `selection/${token}`;
 }
-
-export function callbackKey(callIdHash: string): string {
-  return `callback/${callIdHash}`;
-}

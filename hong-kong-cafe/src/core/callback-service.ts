@@ -1,5 +1,6 @@
 import type { AppBindings } from "../env";
-import { saveCallback, type CallbackRecord } from "./callback";
+import { normalizeContact } from "./contact";
+import { sendCallbackEmail } from "./email-service";
 import { resolveSessionCallId } from "./tokens";
 
 export type RequestCallbackResult =
@@ -14,7 +15,11 @@ export type RequestCallbackResult =
     }
   | {
       ok: false;
-      code: "invalid_session" | "invalid_name" | "invalid_phone" | "conflict";
+      code:
+        | "invalid_session"
+        | "invalid_name"
+        | "invalid_phone"
+        | "store_unavailable";
       message: string;
     };
 
@@ -24,28 +29,57 @@ export async function requestCallback(
   phone: string,
   name?: string,
 ): Promise<RequestCallbackResult> {
-  const callId = await resolveSessionCallId(env.CAFE_KV, sessionToken);
-  if (!callId) {
+  try {
+    const callId = await resolveSessionCallId(env.CAFE_KV, sessionToken);
+    if (!callId) {
+      return {
+        ok: false,
+        code: "invalid_session",
+        message: "This call session is no longer available.",
+      };
+    }
+
+    const contact = normalizeContact(name, phone, false);
+    if (!contact.ok) {
+      return {
+        ok: false,
+        code: contact.code,
+        message: contact.message,
+      };
+    }
+
+    const session = env.CALL_SESSION.idFromName(callId);
+    const result = await session.saveCallback({
+      callbackId: `cb_${crypto.randomUUID()}`,
+      name: contact.value.name,
+      phone: contact.value.phone,
+      createdAt: new Date().toISOString(),
+    });
+
+    if (result.status === "saved") {
+      await sendCallbackEmail({
+        callback_id: result.callback.callback_id,
+        name: result.callback.name,
+        phone: result.callback.phone,
+        created_at: result.callback.created_at,
+      });
+    }
+
+    return {
+      ok: true,
+      status: result.status,
+      callback: {
+        callback_id: result.callback.callback_id,
+        name: result.callback.name,
+        created_at: result.callback.created_at,
+      },
+    };
+  } catch {
     return {
       ok: false,
-      code: "invalid_session",
-      message: "This call session is no longer available.",
+      code: "store_unavailable",
+      message:
+        "I could not save the callback right now. Please try once more or take the number manually.",
     };
   }
-
-  const result = await saveCallback(env.CAFE_KV, callId, name, phone);
-  if (!result.ok) {
-    return result;
-  }
-
-  const callback: CallbackRecord = result.record;
-  return {
-    ok: true,
-    status: result.status,
-    callback: {
-      callback_id: callback.callback_id,
-      name: callback.name,
-      created_at: callback.created_at,
-    },
-  };
 }

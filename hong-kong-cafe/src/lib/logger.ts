@@ -15,6 +15,7 @@ export interface LogFields {
   count?: number;
   status?: number;
   result?: string;
+  provider_error?: string;
 }
 
 export function maskPhone(value: string | undefined): string | undefined {
